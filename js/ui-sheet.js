@@ -96,7 +96,7 @@
     const pane = BI.$('#dataPane');
     const ds = App.ds(sh.dsId);
     const q = (App.ui.fieldSearch || '').toLowerCase();
-    let h = '<div class="pane-hd">데이터 <button class="ibtn" data-cmd="addData" title="데이터 추가">+</button></div>';
+    let h = '<div class="pane-hd">데이터 <button class="ibtn" data-cmd="addData" title="데이터 추가">' + BI.ICON.plus + '</button></div>';
     h += '<div class="ds-sel"><select id="dsSelect">' + App.state.datasources.map((d) => '<option value="' + d.id + '"' + (d.id === sh.dsId ? ' selected' : '') + '>' + BI.esc(d.name) + '</option>').join('') + (App.state.datasources.length ? '' : '<option>(데이터 없음)</option>') + '</select></div>';
     if (!ds) {
       h += '<div class="pane-empty">데이터 원본을 추가하세요.<br><br><button class="btn primary" data-cmd="addData">파일 열기</button><br><br><button class="btn" data-cmd="sample">샘플 데이터</button></div>';
@@ -106,7 +106,7 @@
     h += '<div class="search"><input id="fieldSearch" placeholder="필드 검색" value="' + BI.esc(App.ui.fieldSearch || '') + '"></div>';
     const li = (f) => {
       if (q && !f.name.toLowerCase().includes(q)) return '';
-      return '<li class="field ' + f.role + (f.error ? ' err' : '') + '" draggable="true" data-fid="' + f.id + '" title="' + BI.esc(f.name + (f.calc ? '\n= ' + f.calc : '') + (f.error ? '\n오류: ' + f.error : '')) + '">' + (TYPE_ICON[f.type] || TYPE_ICON.string) + '<span class="fn">' + BI.esc(f.name) + '</span>' + (f.calc ? '<span class="fc" title="계산된 필드">=</span>' : '') + '<span class="fm">▾</span></li>';
+      return '<li class="field ' + f.role + (f.error ? ' err' : '') + '" draggable="true" data-fid="' + f.id + '" title="' + BI.esc(f.name + (f.calc ? '\n= ' + f.calc : '') + (f.error ? '\n오류: ' + f.error : '')) + '">' + (TYPE_ICON[f.type] || TYPE_ICON.string) + '<span class="fn">' + BI.esc(f.name) + '</span>' + (f.calc ? '<span class="fc" title="계산된 필드">=</span>' : '') + '<span class="fm">' + BI.ICON.chev + '</span></li>';
     };
     const dims = ds.fields.filter((f) => f.role === 'dimension');
     const meas = ds.fields.filter((f) => f.role === 'measure');
@@ -121,14 +121,22 @@
   }
 
   /* ---------- 필 HTML ---------- */
+  const pico = (d) => '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
+  const PILL_ICON = {
+    color: pico('<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11A5.5 5.5 0 0 0 8 2.5z" fill="currentColor"/>'),
+    size: pico('<circle cx="5" cy="10.5" r="2"/><circle cx="10.5" cy="7" r="3.8"/>'),
+    label: pico('<path d="M3.5 4h9M8 4v9"/>'),
+    detail: '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><circle cx="4" cy="4" r="1.4"/><circle cx="12" cy="4" r="1.4"/><circle cx="4" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="8" cy="8" r="1.4"/></svg>',
+    tooltip: pico('<path d="M2.5 3.5h11v7.5H7l-3 2.5v-2.5H2.5z"/>'),
+  };
   function pillHtml(p, shelf, idx, ds) {
     const f = D.fieldById(ds, p.f);
     let cls = p.agg ? 'mea' : Q.isTimeline(p, ds) ? 'dim cont' : 'dim';
     if (!f) cls += ' bad';
     const sortIco = p.sort === 'asc' ? '↑' : p.sort === 'desc' ? '↓' : p.sort === 'mdesc' ? '⇣' : p.sort === 'masc' ? '⇡' : '';
-    const ico = shelf === 'color' ? '◐ ' : shelf === 'size' ? '◯ ' : shelf === 'label' ? 'T ' : shelf === 'detail' ? '⁘ ' : shelf === 'tooltip' ? '▭ ' : '';
+    const ico = PILL_ICON[shelf] || '';
     return '<div class="pill ' + cls + '" draggable="true" data-shelf="' + shelf + '" data-idx="' + idx + '" title="' + BI.esc(Q.pillLabel(p, ds)) + '">' +
-      (ico ? '<span class="pi">' + ico + '</span>' : '') + '<span class="pt">' + BI.esc(Q.pillLabel(p, ds)) + '</span>' + (sortIco ? '<span class="ps">' + sortIco + '</span>' : '') + '<span class="pc">▾</span></div>';
+      (ico ? '<span class="pi">' + ico + '</span>' : '') + '<span class="pt">' + BI.esc(Q.pillLabel(p, ds)) + '</span>' + (sortIco ? '<span class="ps">' + sortIco + '</span>' : '') + '<span class="pc">' + BI.ICON.chev + '</span></div>';
   }
   function filterPillHtml(flt, ds) {
     const f = D.fieldById(ds, flt.f);
@@ -140,7 +148,7 @@
     else if (flt.type === 'date') desc = (flt.from ? BI.fmtDate(flt.from) : '…') + ' ~ ' + (flt.to ? BI.fmtDate(flt.to) : '…');
     else if (flt.type === 'top') desc = (flt.dir === 'bottom' ? '하위 ' : '상위 ') + flt.n;
     return '<div class="pill flt' + (flt.global ? ' global' : '') + (f ? '' : ' bad') + '" draggable="true" data-shelf="filters" data-flt="' + flt.id + '" title="' + BI.esc(nm + ': ' + desc + (flt.global ? '\n(모든 시트에 적용)' : '')) + '">' +
-      (flt.global ? '<span class="pi">🌐</span>' : '') + '<span class="pt">' + BI.esc(nm) + '</span><span class="pd">' + BI.esc(desc) + '</span><span class="pc">▾</span></div>';
+      (flt.global ? '<span class="pi">' + BI.ICON.globe + '</span>' : '') + '<span class="pt">' + BI.esc(nm) + '</span><span class="pd">' + BI.esc(desc) + '</span><span class="pc">' + BI.ICON.chev + '</span></div>';
   }
 
   /* ---------- 카드 (필터 / 마크 / 서식) ---------- */
@@ -152,7 +160,7 @@
     h += '<div class="card"><div class="card-hd">마크</div>';
     h += '<select class="sel full" id="markType">' + CH.TYPES.map((t) => '<option value="' + t.id + '"' + (sh.chartType === t.id ? ' selected' : '') + '>' + BI.esc(t.name) + '</option>').join('') + '</select>';
     const enc = [
-      ['color', '<svg viewBox="0 0 16 16" width="14" height="14"><circle cx="5" cy="6" r="3" fill="#4e79a7"/><circle cx="11" cy="6" r="3" fill="#f28e2b"/><circle cx="8" cy="11" r="3" fill="#59a14f"/></svg>'],
+      ['color', '<svg viewBox="0 0 16 16" width="14" height="14"><circle cx="5" cy="6" r="3" fill="#3563e9"/><circle cx="11" cy="6" r="3" fill="#eb6834"/><circle cx="8" cy="11" r="3" fill="#1baf7a"/></svg>'],
       ['size', '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="5" cy="10" r="2"/><circle cx="10.5" cy="7.5" r="4.5"/></svg>'],
       ['label', '<svg viewBox="0 0 16 16" width="14" height="14"><text x="3" y="13" font-size="12" font-weight="bold" fill="currentColor">T</text></svg>'],
       ['detail', '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><circle cx="4" cy="4" r="1.5"/><circle cx="12" cy="4" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="8" cy="8" r="1.5"/></svg>'],
@@ -176,6 +184,9 @@
     if (['scatter', 'bubble'].includes(type)) h += chk('trend', '추세선 (선형)');
     if (['bar', 'hbar', 'line', 'area'].includes(type)) h += chk('refLine', '평균 참조선');
     if (type === 'kpi') h += '<label class="chk"><input type="checkbox" data-opt="kpiLatest"' + (o.kpiLatest !== false ? ' checked' : '') + '> 마지막 기간 값 표시</label>';
+    const fs = String(o.fontScale || 1);
+    h += '<div class="opt-row"><span>글자 크기</span><div class="seg xs" role="group" aria-label="글자 크기">' + [['0.85', '작게', 11], ['1', '보통', 12.5], ['1.2', '크게', 14], ['1.45', '아주 크게', 16]].map(([v, n, px]) => '<button type="button" data-optset="fontScale" data-v="' + v + '" class="' + (fs === v ? 'on' : '') + '" title="' + n + '" style="font-size:' + px + 'px">가</button>').join('') + '</div></div>';
+    if (o.legend !== false) h += '<div class="opt-row"><span>범례 위치</span><div class="seg xs" role="group" aria-label="범례 위치">' + [['top', '위'], ['right', '오른쪽'], ['bottom', '아래']].map(([v, n]) => '<button type="button" data-optset="legendPos" data-v="' + v + '" class="' + ((o.legendPos || 'top') === v ? 'on' : '') + '">' + n + '</button>').join('') + '</div></div>';
     h += '<div class="opt-row"><span>숫자 형식</span><select data-opt="numFmt">' + BI.NUM_FORMATS.map(([k, n]) => '<option value="' + k + '"' + (o.numFmt === k ? ' selected' : '') + '>' + n + '</option>').join('') + '</select></div>';
     h += '<div class="opt-row"><span>색상 팔레트</span><select data-opt="palette">' + Object.keys(BI.PALETTES).map((k) => '<option value="' + k + '"' + (o.palette === k ? ' selected' : '') + '>' + BI.PALETTE_NAMES[k] + '</option>').join('') + '</select></div>';
     h += '<div class="opt-row"><span>연속 색상</span><select data-opt="seq">' + Object.keys(BI.SEQ).map((k) => '<option value="' + k + '"' + (o.seq === k ? ' selected' : '') + '>' + BI.SEQ_NAMES[k] + '</option>').join('') + '</select></div>';
@@ -201,6 +212,7 @@
     if (!view) return;
     const t = BI.$('#viewTitle');
     t.style.display = sh.options.showTitle === false ? 'none' : '';
+    t.style.setProperty('--fs', +sh.options.fontScale || 1);
     t.innerHTML = '<span class="vt-text" title="더블클릭하여 제목 편집">' + BI.esc(sh.title || sh.name) + '</span>';
     const out = App.renderChartInto(view, sh, {
       onSelect: (sel, ev) => sheetSelectMenu(sh, sel, ev),
@@ -224,9 +236,9 @@
     if (!sel || !sel.length || !ev) return;
     const x = ev.clientX || (ev.offsetX || 0), y = ev.clientY || (ev.offsetY || 0);
     const items = [{ header: sel.map((s) => s.label).join(', ').slice(0, 80) }];
-    items.push({ text: '✓ 이 항목만 유지', onClick: () => keepExclude(sh, sel, false) });
-    if (sel.length === 1) items.push({ text: '✕ 제외', onClick: () => keepExclude(sh, sel, true) });
-    else items.push({ text: '✕ 제외', sub: sel.map((s) => ({ text: s.label, onClick: () => keepExclude(sh, [s], true) })) });
+    items.push({ text: '이 항목만 유지', onClick: () => keepExclude(sh, sel, false) });
+    if (sel.length === 1) items.push({ text: '제외', onClick: () => keepExclude(sh, sel, true) });
+    else items.push({ text: '제외', sub: sel.map((s) => ({ text: s.label, onClick: () => keepExclude(sh, [s], true) })) });
     BI.menu(x, y, items);
   }
   function keepExclude(sh, sel, exclude) {
@@ -257,7 +269,7 @@
       const sp = ds ? CH.spec(sh, ds) : null;
       const out = BI.$('#view') && BI.$('#view')._out;
       const cur = sh.chartType;
-      h += '<div class="card showme"><div class="card-hd">표현 방식 <button class="ibtn sm" data-cmd="showMe" title="닫기">×</button></div><div class="sm-grid">';
+      h += '<div class="card showme"><div class="card-hd">표현 방식 <button class="ibtn sm" data-cmd="showMe" title="닫기">' + BI.ICON.x + '</button></div><div class="sm-grid">';
       CH.TYPES.forEach((t) => {
         const fit = sp ? CH.fits(t.id, sp) : false;
         const on = cur === t.id || (cur === 'auto' && t.id === 'auto');
@@ -294,7 +306,7 @@
       const f = D.fieldById(ds, flt.f);
       if (!f) return;
       const nm = flt.type === 'list' && flt.dp ? Q.pillLabel({ f: flt.f, dp: flt.dp }, ds) : f.name;
-      const card = BI.h('<div class="qf" data-flt="' + flt.id + '"><div class="qf-hd"><span>' + BI.esc(nm) + '</span>' + (flt.global ? '<span class="muted" title="모든 시트에 적용">🌐</span>' : '') + '<button class="ibtn sm qf-menu" title="필터 메뉴">▾</button></div><div class="qf-bd"></div></div>');
+      const card = BI.h('<div class="qf" data-flt="' + flt.id + '"><div class="qf-hd"><span>' + BI.esc(nm) + '</span>' + (flt.global ? '<span class="muted" title="모든 시트에 적용">' + BI.ICON.globe + '</span>' : '') + '<button class="ibtn sm qf-menu" title="필터 메뉴">' + BI.ICON.chev + '</button></div><div class="qf-bd"></div></div>');
       const bd = BI.$('.qf-bd', card);
       BI.$('.qf-menu', card).onclick = (e) => {
         const r = e.target.getBoundingClientRect();
@@ -397,6 +409,13 @@
       }
     });
     root.addEventListener('click', (e) => {
+      const os = e.target.closest('[data-optset]');
+      if (os) {
+        const sh0 = App.activeSheet();
+        const k = os.dataset.optset, v = os.dataset.v;
+        if (sh0 && sh0.options[k] !== v) App.mutate(() => { sh0.options[k] = k === 'fontScale' ? +v : v; });
+        return;
+      }
       const sh = App.activeSheet();
       if (!sh) return;
       const ct = e.target.closest('[data-ctype]');

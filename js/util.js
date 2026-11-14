@@ -112,9 +112,26 @@
     return collator.compare(String(a), String(b));
   };
 
+  /* ---------- 아이콘 (SVG, 1.6px 선) ---------- */
+  const ico = (d, sz) => '<svg viewBox="0 0 16 16" width="' + (sz || 14) + '" height="' + (sz || 14) + '" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
+  BI.ICON = {
+    chev: ico('<path d="M5 6.5l3 3 3-3"/>'),
+    chevR: ico('<path d="M6.5 5l3 3-3 3"/>', 12),
+    x: ico('<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>'),
+    xl: ico('<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>', 18),
+    check: ico('<path d="M3.5 8.5l3 3 6-7"/>'),
+    more: '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="8" cy="3.5" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="8" cy="12.5" r="1.3"/></svg>',
+    filter: ico('<path d="M2.5 3.5h11l-4.2 5v4l-2.6 1.2V8.5z"/>'),
+    globe: ico('<circle cx="8" cy="8" r="5.8"/><path d="M2.2 8h11.6M8 2.2c1.7 1.8 2.4 3.7 2.4 5.8S9.7 12 8 13.8C6.3 12 5.6 10.1 5.6 8S6.3 4 8 2.2z"/>', 13),
+    edit: ico('<path d="M10.5 2.8l2.7 2.7L6 12.7l-3.3.6.6-3.3z"/>'),
+    plus: ico('<path d="M8 3v10M3 8h10"/>', 16),
+    shield: ico('<path d="M8 1.8l5 2v3.8c0 3.1-2.1 5.6-5 6.6-2.9-1-5-3.5-5-6.6V3.8z"/><path d="M5.8 8l1.6 1.6 3-3.2"/>', 15),
+  };
+
   /* ---------- 색상 ---------- */
   BI.PALETTES = {
-    default: ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac', '#2f6497', '#d4a017', '#8cd17d', '#86bcb6', '#d37295', '#a0cbe8'],
+    default: ['#3563e9', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948', '#86a6f4', '#f4a27f', '#7fd3b4', '#f5c866', '#f2b3cb', '#5db85d', '#a79ceb', '#ee9493'],
+    classic: ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac', '#2f6497', '#d4a017', '#8cd17d', '#86bcb6', '#d37295', '#a0cbe8'],
     bright: ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'],
     blue: ['#08306b', '#08519c', '#2171b5', '#4292c6', '#6baed6', '#9ecae1', '#c6dbef', '#3d5a80', '#98c1d9', '#293241'],
     warm: ['#9e0142', '#d53e4f', '#f46d43', '#fdae61', '#fee08b', '#e6ab02', '#a6761d', '#b35806', '#e08214', '#fdb863'],
@@ -122,14 +139,14 @@
     corporate: ['#1b3a5c', '#2e86ab', '#a23b72', '#f18f01', '#c73e1d', '#3b1f2b', '#6c757d', '#44af69', '#f8333c', '#2b9eb3'],
     mono: ['#212529', '#495057', '#6c757d', '#868e96', '#adb5bd', '#343a40', '#5c636a', '#7a8086', '#9aa0a6', '#c0c4c8'],
   };
-  BI.PALETTE_NAMES = { default: '기본', bright: '선명', blue: '블루', warm: '따뜻한', pastel: '파스텔', corporate: '비즈니스', mono: '모노' };
+  BI.PALETTE_NAMES = { default: '기본', classic: '클래식', bright: '선명', blue: '블루', warm: '따뜻한', pastel: '파스텔', corporate: '비즈니스', mono: '모노' };
   BI.SEQ = {
-    blue: ['#deebf7', '#08519c'],
+    blue: ['#e3ebfd', '#1c45b8'],
     green: ['#e5f5e0', '#006d2c'],
     orange: ['#fee6ce', '#a63603'],
     red: ['#fee0d2', '#a50f15'],
     purple: ['#efedf5', '#54278f'],
-    diverge: ['#c0392b', '#f7f7f7', '#2471a3'],
+    diverge: ['#d1343e', '#f2f3f5', '#3563e9'],
   };
   BI.SEQ_NAMES = { blue: '파랑', green: '초록', orange: '주황', red: '빨강', purple: '보라', diverge: '발산(빨강-파랑)' };
 
@@ -206,7 +223,7 @@
   BI.modal = function (opts) {
     const ov = BI.h(
       '<div class="modal-ov"><div class="modal ' + (opts.cls || '') + '" style="' + (opts.width ? 'width:' + opts.width + 'px' : '') + '">' +
-        '<div class="modal-hd"><span>' + BI.esc(opts.title || '') + '</span><button class="x" title="닫기">×</button></div>' +
+        '<div class="modal-hd"><span>' + BI.esc(opts.title || '') + '</span><button class="x" title="닫기">' + BI.ICON.xl + '</button></div>' +
         '<div class="modal-bd"></div><div class="modal-ft"></div></div></div>'
     );
     const bd = BI.$('.modal-bd', ov), ft = BI.$('.modal-ft', ov);
@@ -271,8 +288,8 @@
         if (it.header) return m.appendChild(BI.h('<div class="ctx-header">' + BI.esc(it.header) + '</div>'));
         const row = BI.h(
           '<div class="ctx-item' + (it.disabled ? ' disabled' : '') + '">' +
-            '<span class="ck">' + (it.checked ? '✓' : '') + '</span><span class="tx">' + BI.esc(it.text) + '</span>' +
-            (it.sub ? '<span class="ar">▸</span>' : '') + '</div>'
+            '<span class="ck">' + (it.checked ? BI.ICON.check : '') + '</span><span class="tx">' + BI.esc(it.text) + '</span>' +
+            (it.sub ? '<span class="ar">' + BI.ICON.chevR + '</span>' : '') + '</div>'
         );
         if (it.sub) {
           row.addEventListener('mouseenter', () => {

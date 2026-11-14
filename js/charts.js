@@ -45,7 +45,33 @@
   ];
   CH.byId = Object.fromEntries(CH.TYPES.map((t) => [t.id, t]));
 
-  CH.FONT = '"Malgun Gothic","맑은 고딕","Apple SD Gothic Neo","Noto Sans KR","Segoe UI",sans-serif';
+  CH.FONT = '"Pretendard Variable",Pretendard,-apple-system,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic","맑은 고딕","Segoe UI",sans-serif';
+  // 앱 디자인 토큰과 맞춘 ECharts 테마 (축/격자는 뒤로 물러나고 데이터가 앞에 서도록)
+  CH.THEME = 'obi';
+  (function () {
+    const axisCommon = {
+      axisLine: { lineStyle: { color: '#d5dae1' } },
+      axisTick: { lineStyle: { color: '#d5dae1' } },
+      axisLabel: { color: '#6b7684' },
+      splitLine: { lineStyle: { color: '#eef1f4' } },
+      splitArea: { areaStyle: { color: ['rgba(245,247,249,.6)', 'rgba(255,255,255,0)'] } },
+      nameTextStyle: { color: '#6b7684' },
+    };
+    echarts.registerTheme(CH.THEME, {
+      textStyle: { fontFamily: CH.FONT, color: '#4e5968' },
+      title: { textStyle: { color: '#191f28' }, subtextStyle: { color: '#6b7684' } },
+      legend: { textStyle: { color: '#4e5968' }, itemGap: 14, pageIconColor: '#3563e9', pageIconInactiveColor: '#c3cad2', pageTextStyle: { color: '#6b7684' } },
+      categoryAxis: axisCommon,
+      valueAxis: axisCommon,
+      timeAxis: axisCommon,
+      logAxis: axisCommon,
+      line: { symbol: 'circle', symbolSize: 5, lineStyle: { width: 2.25 } },
+      bar: { itemStyle: { borderRadius: 2 } },
+      pie: { itemStyle: { borderColor: '#fff', borderWidth: 2 } },
+      scatter: { itemStyle: { borderColor: '#fff', borderWidth: 1 } },
+      markLine: { lineStyle: { color: '#9aa3ad' } },
+    });
+  })();
 
   /* ---------- 시트 구성 분석 ---------- */
   CH.spec = function (sheet, ds) {
@@ -162,10 +188,12 @@
         trigger: 'item',
         confine: true,
         appendToBody: false,
-        backgroundColor: 'rgba(255,255,255,.97)',
-        borderColor: '#c9d1da',
-        textStyle: { color: '#222', fontSize: 12 },
-        extraCssText: 'box-shadow:0 2px 10px rgba(0,0,0,.15);border-radius:4px;',
+        backgroundColor: '#ffffff',
+        borderColor: '#e2e6eb',
+        borderWidth: 1,
+        padding: [8, 12],
+        textStyle: { color: '#191f28', fontSize: 12, fontFamily: CH.FONT },
+        extraCssText: 'box-shadow:0 12px 32px rgba(25,31,40,.14),0 2px 8px rgba(25,31,40,.08);border-radius:10px;',
         formatter: (p) => {
           if (p.data && p.data._tip) return p.data._tip;
           if (p.data && p.data._r != null) return tipHtml(ctx, ctx.res.rows[p.data._r]);
@@ -178,7 +206,7 @@
 
   function legendOpt(ctx, show) {
     if (!ctx.o.legend || !show) return { show: false };
-    return { type: 'scroll', top: 0, left: 'center', textStyle: { fontSize: 11 }, itemWidth: 14, itemHeight: 10 };
+    return { type: 'scroll', top: 0, left: 'center', textStyle: { fontSize: 11.5 }, icon: 'circle', itemWidth: 8, itemHeight: 8, itemGap: 16 };
   }
 
   function sel(ctx, r) {
@@ -292,9 +320,9 @@
     if (horizontal) catAxis.inverse = true;
     const fmt0 = type === 'pct100' ? 'pct' : ctx.fmt(valM[0]);
     const valAxis = (name, fmt, pos) => ({
-      type: 'value', name, nameLocation: 'middle', nameGap: horizontal ? 28 : 52, nameTextStyle: { color: '#555', fontSize: 11 },
+      type: 'value', name, nameLocation: 'middle', nameGap: horizontal ? 28 : 52, nameTextStyle: { color: '#6b7684', fontSize: 11 },
       axisLabel: { fontSize: 11, formatter: BI.axisFormatter(fmt) },
-      splitLine: { lineStyle: { color: '#eceff3' } },
+      splitLine: { lineStyle: { color: '#eef1f4' } },
       position: pos,
       max: type === 'pct100' ? 1 : undefined,
       scale: ctx.o.zeroBase === false,
@@ -319,7 +347,7 @@
     if (cscale) opt.visualMap = undefined;
     // 참조선 (평균)
     if (ctx.o.refLine && series.length) {
-      series[0].markLine = { symbol: 'none', silent: true, lineStyle: { type: 'dashed', color: '#d62728' }, label: { formatter: (p) => '평균 ' + ctx.fv(valM[0], p.value), fontSize: 10 }, data: [{ type: 'average' }] };
+      series[0].markLine = { symbol: 'none', silent: true, lineStyle: { type: 'dashed', color: '#d1343e' }, label: { formatter: (p) => '평균 ' + ctx.fv(valM[0], p.value), fontSize: 10 }, data: [{ type: 'average' }] };
     }
     return { option: opt };
   }
@@ -350,12 +378,12 @@
     opt.grid = { left: 20, right: 30, top: 36, bottom: 12, containLabel: true };
     opt.xAxis = { type: 'category', data: arr.map((x) => x.label), axisLabel: { fontSize: 11, hideOverlap: true, rotate: arr.length > 10 ? 35 : 0 } };
     opt.yAxis = [
-      { type: 'value', axisLabel: { formatter: BI.axisFormatter(ctx.fmt(mi)), fontSize: 11 }, splitLine: { lineStyle: { color: '#eceff3' } } },
+      { type: 'value', axisLabel: { formatter: BI.axisFormatter(ctx.fmt(mi)), fontSize: 11 }, splitLine: { lineStyle: { color: '#eef1f4' } } },
       { type: 'value', max: 1, min: 0, axisLabel: { formatter: (v) => Math.round(v * 100) + '%', fontSize: 11 }, splitLine: { show: false } },
     ];
     opt.series = [
       { name: ctx.ml(mi), type: 'bar', data: arr.map((x) => ({ value: x.v, _r: x.ri })), barMaxWidth: 50, label: { show: ctx.o.labels, position: 'top', fontSize: 10, formatter: (p) => ctx.fv(mi, p.value) } },
-      { name: '누적 비율', type: 'line', yAxisIndex: 1, data: cum, symbolSize: 5, itemStyle: { color: '#e15759' }, markLine: { silent: true, symbol: 'none', lineStyle: { type: 'dashed', color: '#999' }, data: [{ yAxis: 0.8 }], label: { formatter: '80%' } } },
+      { name: '누적 비율', type: 'line', yAxisIndex: 1, data: cum, symbolSize: 5, itemStyle: { color: '#eb6834' }, markLine: { silent: true, symbol: 'none', lineStyle: { type: 'dashed', color: '#999' }, data: [{ yAxis: 0.8 }], label: { formatter: '80%' } } },
     ];
     return { option: opt };
   }
@@ -388,12 +416,12 @@
     };
     opt.grid = { left: 20, right: 20, top: 20, bottom: 12, containLabel: true };
     opt.xAxis = { type: 'category', data: labels, axisLabel: { fontSize: 11, hideOverlap: true, rotate: labels.length > 12 ? 35 : 0 } };
-    opt.yAxis = { type: 'value', axisLabel: { formatter: BI.axisFormatter(ctx.fmt(mi)), fontSize: 11 }, splitLine: { lineStyle: { color: '#eceff3' } } };
+    opt.yAxis = { type: 'value', axisLabel: { formatter: BI.axisFormatter(ctx.fmt(mi)), fontSize: 11 }, splitLine: { lineStyle: { color: '#eef1f4' } } };
     const lbl = (p) => (p.value === '-' ? '' : ctx.fv(mi, p.value));
     opt.series = [
       { type: 'bar', stack: 'w', silent: true, itemStyle: { color: 'transparent' }, data: base },
-      { name: '증가', type: 'bar', stack: 'w', barMaxWidth: 60, data: pos.map((v, i) => ({ value: v, itemStyle: { color: i === labels.length - 1 ? '#4e79a7' : '#59a14f' } })), label: { show: ctx.o.labels, position: 'top', fontSize: 10, formatter: lbl } },
-      { name: '감소', type: 'bar', stack: 'w', barMaxWidth: 60, data: neg.map((v, i) => ({ value: v, itemStyle: { color: i === labels.length - 1 ? '#4e79a7' : '#e15759' } })), label: { show: ctx.o.labels, position: 'bottom', fontSize: 10, formatter: (p) => (p.value === '-' ? '' : '-' + ctx.fv(mi, p.value)) } },
+      { name: '증가', type: 'bar', stack: 'w', barMaxWidth: 60, data: pos.map((v, i) => ({ value: v, itemStyle: { color: i === labels.length - 1 ? '#3563e9' : '#1baf7a' } })), label: { show: ctx.o.labels, position: 'top', fontSize: 10, formatter: lbl } },
+      { name: '감소', type: 'bar', stack: 'w', barMaxWidth: 60, data: neg.map((v, i) => ({ value: v, itemStyle: { color: i === labels.length - 1 ? '#3563e9' : '#e34948' } })), label: { show: ctx.o.labels, position: 'bottom', fontSize: 10, formatter: (p) => (p.value === '-' ? '' : '-' + ctx.fv(mi, p.value)) } },
     ];
     return { option: opt };
   }
@@ -440,7 +468,7 @@
       emphasis: { scale: true, scaleSize: 6 },
     }];
     if (type === 'donut') {
-      opt.title = { text: ctx.fv(mi, tot), subtext: ctx.ml(mi), left: opt.legend.show === false ? 'center' : '42%', top: '45%', textAlign: 'center', textStyle: { fontSize: 18, fontWeight: 'bold', color: '#333' }, subtextStyle: { fontSize: 11 } };
+      opt.title = { text: ctx.fv(mi, tot), subtext: ctx.ml(mi), left: opt.legend.show === false ? 'center' : '42%', top: '45%', textAlign: 'center', textStyle: { fontSize: 20, fontWeight: 800, color: '#191f28' }, subtextStyle: { fontSize: 11 } };
       if (opt.legend.show === false) opt.title.left = 'center';
     }
     return { option: opt };
@@ -557,7 +585,7 @@
     const opt = baseOption(ctx);
     opt.legend = legendOpt(ctx, groups.length > 1);
     opt.grid = { left: 20, right: 40, top: groups.length > 1 && ctx.o.legend ? 36 : 20, bottom: 20, containLabel: true };
-    const ax = (mi, nameGap) => ({ type: 'value', scale: true, name: ctx.ml(mi), nameLocation: 'middle', nameGap, nameTextStyle: { color: '#555', fontSize: 11 }, axisLabel: { formatter: BI.axisFormatter(ctx.fmt(mi)), fontSize: 11 }, splitLine: { lineStyle: { color: '#eceff3' } } });
+    const ax = (mi, nameGap) => ({ type: 'value', scale: true, name: ctx.ml(mi), nameLocation: 'middle', nameGap, nameTextStyle: { color: '#6b7684', fontSize: 11 }, axisLabel: { formatter: BI.axisFormatter(ctx.fmt(mi)), fontSize: 11 }, splitLine: { lineStyle: { color: '#eef1f4' } } });
     opt.xAxis = ax(xm, 26);
     opt.yAxis = ax(ym, 52);
     opt.grid.bottom = 30;
@@ -620,7 +648,7 @@
     opt.tooltip.formatter = (p) => '<div class="tip"><b>' + BI.esc((f ? f.name : '') + ' ' + labels[p.dataIndex]) + '</b><div><span class="tk">빈도</span><b>' + BI.formatNumber(p.value) + '</b></div><div><span class="tk">비율</span><b>' + BI.formatNumber(p.value / vals.length, 'pct') + '</b></div></div>';
     opt.grid = { left: 20, right: 20, top: 20, bottom: 30, containLabel: true };
     opt.xAxis = { type: 'category', data: labels, name: f ? f.name : '', nameLocation: 'middle', nameGap: 40, axisLabel: { fontSize: 10, rotate: 30, hideOverlap: true } };
-    opt.yAxis = { type: 'value', name: '빈도', axisLabel: { fontSize: 11 }, splitLine: { lineStyle: { color: '#eceff3' } } };
+    opt.yAxis = { type: 'value', name: '빈도', axisLabel: { fontSize: 11 }, splitLine: { lineStyle: { color: '#eef1f4' } } };
     opt.series = [{ type: 'bar', data: cnt, barCategoryGap: '2%', itemStyle: { color: ctx.palette[0] }, label: { show: ctx.o.labels, position: 'top', fontSize: 10 } }];
     return { option: opt };
   }
@@ -676,7 +704,7 @@
     };
     opt.grid = { left: 20, right: 20, top: 20, bottom: 20, containLabel: true };
     opt.xAxis = { type: 'category', data: labels, axisLabel: { fontSize: 11, rotate: labels.length > 10 ? 30 : 0, hideOverlap: true } };
-    opt.yAxis = { type: 'value', scale: true, name: (BI.Data.fieldById(ctx.ds, mp.f) || {}).name, axisLabel: { formatter: BI.axisFormatter(fmt), fontSize: 11 }, splitLine: { lineStyle: { color: '#eceff3' } } };
+    opt.yAxis = { type: 'value', scale: true, name: (BI.Data.fieldById(ctx.ds, mp.f) || {}).name, axisLabel: { formatter: BI.axisFormatter(fmt), fontSize: 11 }, splitLine: { lineStyle: { color: '#eef1f4' } } };
     opt.series = [
       { type: 'boxplot', data: boxes, itemStyle: { color: '#dbe7f3', borderColor: ctx.palette[0] } },
       { type: 'scatter', data: outl, symbolSize: 5, itemStyle: { color: ctx.palette[2], opacity: 0.6 } },
@@ -725,7 +753,7 @@
     opt.series = [{
       type: 'gauge', min: 0, max, radius: '88%', center: ['50%', '58%'], startAngle: 200, endAngle: -20,
       progress: { show: true, width: 18, itemStyle: { color: ctx.palette[0] } },
-      axisLine: { lineStyle: { width: 18, color: [[1, '#e6ebf1']] } },
+      axisLine: { lineStyle: { width: 18, color: [[1, '#edf0f3']] } },
       axisTick: { show: false }, splitLine: { length: 8, lineStyle: { width: 1, color: '#999' } },
       axisLabel: { distance: 22, fontSize: 10, formatter: (x) => BI.compact(x) },
       pointer: { show: true, width: 4, length: '60%' }, anchor: { show: true, size: 10, itemStyle: { color: '#555' } },
@@ -764,12 +792,12 @@
     opt.legend = legendOpt(ctx, true);
     opt.grid = { left: 20, right: 40, top: 36, bottom: 10, containLabel: true };
     opt.yAxis = { type: 'category', data: cats.map((c) => c.label), inverse: true, axisLabel: { fontSize: 11 } };
-    opt.xAxis = { type: 'value', axisLabel: { formatter: BI.axisFormatter(ctx.fmt(am)), fontSize: 11 }, splitLine: { lineStyle: { color: '#eceff3' } } };
+    opt.xAxis = { type: 'value', axisLabel: { formatter: BI.axisFormatter(ctx.fmt(am)), fontSize: 11 }, splitLine: { lineStyle: { color: '#eef1f4' } } };
     opt.series = [
       { name: '목표 구간', type: 'bar', data: T.map((t) => t * 1.2), barWidth: '70%', itemStyle: { color: '#e9edf2' }, silent: true, barGap: '-100%', z: 1 },
-      { name: ctx.ml(am), type: 'bar', data: A.map((v, i) => ({ value: v, _r: RI[i], itemStyle: { color: v >= T[i] ? '#59a14f' : ctx.palette[0] } })), barWidth: '32%', z: 3,
+      { name: ctx.ml(am), type: 'bar', data: A.map((v, i) => ({ value: v, _r: RI[i], itemStyle: { color: v >= T[i] ? '#1baf7a' : ctx.palette[0] } })), barWidth: '32%', z: 3,
         label: { show: true, position: 'right', fontSize: 10, formatter: (p) => BI.formatNumber(T[p.dataIndex] ? p.value / T[p.dataIndex] : 0, 'pct') } },
-      { name: ctx.ml(tm), type: 'scatter', data: T.map((t, i) => ({ value: t, _r: RI[i] })), symbol: 'rect', symbolSize: [4, 26], itemStyle: { color: '#c0392b' }, z: 4 },
+      { name: ctx.ml(tm), type: 'scatter', data: T.map((t, i) => ({ value: t, _r: RI[i] })), symbol: 'rect', symbolSize: [4, 26], itemStyle: { color: '#191f28' }, z: 4 },
     ];
     return { option: opt };
   }
@@ -830,6 +858,16 @@
   }
 
   /* ---------- 테이블 (HTML) ---------- */
+  // 표 머리글 정렬 표시 (mi == null 이면 이름순 정렬 표시)
+  function sortMark(p, mi) {
+    if (!p || !p.sort) return '';
+    let dir = null;
+    if (mi == null && (p.sort === 'asc' || p.sort === 'desc')) dir = p.sort;
+    if (mi != null && (p.sort === 'mdesc' || p.sort === 'masc') && (p.sortBy || 0) === mi) dir = p.sort === 'masc' ? 'asc' : 'desc';
+    if (!dir) return '';
+    return '<span class="sort-mk"><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (dir === 'asc' ? '<path d="M8 13V3M4 7l4-4 4 4"/>' : '<path d="M8 3v10M4 9l4 4 4-4"/>') + '</svg></span>';
+  }
+
   function table(ctx, highlight) {
     const sp = ctx.sp;
     const res = runQuery(ctx);
@@ -869,7 +907,7 @@
     // 열 머리글
     for (let lvl = 0; lvl < colD.length; lvl++) {
       h += '<tr>';
-      if (lvl === 0) rowD.forEach((j) => (h += '<th class="rh corner" rowspan="' + hdrRows + '">' + BI.esc(ctx.dl(j)) + '</th>'));
+      if (lvl === 0) rowD.forEach((j) => (h += '<th class="rh corner sortable" data-sortf="' + BI.esc(ctx.sp.dims[j].f) + '" rowspan="' + hdrRows + '">' + BI.esc(ctx.dl(j)) + sortMark(ctx.sp.dims[j], null) + '</th>'));
       if (lvl === 0 && !rowD.length) h += '<th class="corner" rowspan="' + hdrRows + '"></th>';
       let i = 0;
       while (i < cCombos.length) {
@@ -884,8 +922,12 @@
     }
     if (multiM || !colD.length) {
       h += '<tr>';
-      if (!colD.length) { rowD.forEach((j) => (h += '<th class="rh corner">' + BI.esc(ctx.dl(j)) + '</th>')); if (!rowD.length) h += ''; }
-      cCombos.forEach(() => mOrder.forEach((mi) => (h += '<th class="mh">' + BI.esc(ctx.ml(mi)) + '</th>')));
+      if (!colD.length) { rowD.forEach((j) => (h += '<th class="rh corner sortable" data-sortf="' + BI.esc(ctx.sp.dims[j].f) + '">' + BI.esc(ctx.dl(j)) + sortMark(ctx.sp.dims[j], null) + '</th>')); if (!rowD.length) h += ''; }
+      const rowShelf = (ctx.sp.D && ctx.sp.D.row && ctx.sp.D.row.length ? ctx.sp.D.row : rowD);
+      const lastRow = !colD.length && rowShelf.length ? ctx.sp.dims[rowShelf[rowShelf.length - 1]] : null;
+      cCombos.forEach(() => mOrder.forEach((mi) => (h += lastRow
+        ? '<th class="mh sortable" data-sortf="' + BI.esc(lastRow.f) + '" data-sortm="' + mi + '">' + BI.esc(ctx.ml(mi)) + sortMark(lastRow, mi) + '</th>'
+        : '<th class="mh">' + BI.esc(ctx.ml(mi)) + '</th>')));
       if (rowTot) mOrder.forEach((mi) => (h += '<th class="mh tot">' + BI.esc(ctx.ml(mi)) + '</th>'));
       h += '</tr>';
     }
@@ -1004,10 +1046,48 @@
       console.error(e);
       out = { empty: '차트를 그리는 중 오류가 발생했습니다: ' + e.message };
     }
+    if (out.option) postStyle(out.option, ctx);
     out.ctx = ctx;
     out.type = type;
+    out.fontScale = +ctx.o.fontScale || 1;
     return out;
   };
+
+  /* 서식 후처리: 글자 크기 배율, 범례 위치 */
+  function postStyle(opt, ctx) {
+    const k = +ctx.o.fontScale || 1;
+    if (k !== 1) {
+      const seen = new Set();
+      const walk = (o) => {
+        if (!o || typeof o !== 'object' || seen.has(o)) return;
+        seen.add(o);
+        if (Array.isArray(o)) { o.forEach(walk); return; }
+        Object.keys(o).forEach((key) => {
+          const v = o[key];
+          if (key === 'fontSize' && typeof v === 'number') o[key] = Math.round(v * k * 10) / 10;
+          else if (key !== 'data' && v && typeof v === 'object') walk(v);
+        });
+      };
+      walk(opt);
+      opt.textStyle = Object.assign({}, opt.textStyle, { fontSize: Math.round(12 * k) });
+      const ensure = (o, path) => { if (!o) return; [].concat(o).forEach((x) => { if (!x) return; x[path] = x[path] || {}; if (x[path].fontSize == null) x[path].fontSize = Math.round(12 * k); }); };
+      ensure(opt.legend, 'textStyle');
+      ensure(opt.xAxis, 'axisLabel'); ensure(opt.yAxis, 'axisLabel');
+      if (opt.tooltip) opt.tooltip.textStyle = Object.assign({}, opt.tooltip.textStyle, { fontSize: Math.round(12 * k) });
+    }
+    const pos = ctx.o.legendPos || 'top';
+    const lg = opt.legend;
+    if (pos !== 'top' && lg && !Array.isArray(lg) && lg.show !== false && lg.orient !== 'vertical') {
+      const g = opt.grid && !Array.isArray(opt.grid) ? opt.grid : null;
+      if (pos === 'bottom') {
+        Object.assign(lg, { top: 'auto', bottom: 0, left: 'center' });
+        if (g) { if (g.top >= 30) g.top = 18; g.bottom = (g.bottom || 0) + Math.round(26 * k); }
+      } else if (pos === 'right') {
+        Object.assign(lg, { orient: 'vertical', top: 'middle', left: 'auto', right: 4 });
+        if (g) { if (g.top >= 30) g.top = 18; g.right = (g.right || 0) + Math.round(110 * k); }
+      }
+    }
+  }
 
   /* 클릭된 항목 → 선택 조건 */
   CH.selectionFor = function (out, params) {

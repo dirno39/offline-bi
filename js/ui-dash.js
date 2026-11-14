@@ -28,7 +28,7 @@
     h += '<div class="sec-hd">레이아웃</div><div class="opts">';
     h += '<button class="btn sm full" data-dact="auto2">자동 배치 (2열)</button><button class="btn sm full" data-dact="auto1">자동 배치 (1열)</button>';
     h += '<label class="chk"><input type="checkbox" data-dopt="showFilters"' + (db.showFilters !== false ? ' checked' : '') + '> 필터 카드 표시</label>';
-    h += '</div><div class="tip-box"><b>사용법</b><br>· 머리글을 끌어 이동, 오른쪽 아래 모서리로 크기 조절<br>· <b>⛃ 필터로 사용</b>을 켠 시트의 마크를 클릭하면 같은 데이터를 쓰는 다른 시트가 필터링됩니다<br>· 빈 곳을 클릭하거나 선택 칩의 ×로 해제</div>';
+    h += '</div><div class="tip-box"><b>사용법</b><br>· 머리글을 끌어 이동, 오른쪽 아래 모서리로 크기 조절<br>· <b>필터로 사용</b>(깔때기 아이콘)을 켠 시트의 마크를 클릭하면 같은 데이터를 쓰는 다른 시트가 필터링됩니다<br>· 빈 곳을 클릭하거나 선택 칩의 닫기 버튼으로 해제</div>';
     BI.$('#dashSide').innerHTML = h;
   }
 
@@ -45,7 +45,7 @@
   function renderHead(db) {
     const head = BI.$('#dashHead');
     let h = '<div class="dash-title" title="더블클릭하여 편집">' + BI.esc(db.title || db.name) + '</div>';
-    if (db.selection) h += '<div class="sel-chip">선택: ' + BI.esc(db.selection.label) + ' <button data-dact="clearSel" title="선택 해제">×</button></div>';
+    if (db.selection) h += '<div class="sel-chip">선택: ' + BI.esc(db.selection.label) + ' <button data-dact="clearSel" title="선택 해제">' + BI.ICON.x + '</button></div>';
     h += '<div class="dash-filters" id="dashFilters"></div>';
     head.innerHTML = h;
     if (db.showFilters === false) return;
@@ -99,7 +99,7 @@
       const title = BI.$('.di-title', el), btns = BI.$('.di-btns', el);
       if (it.type === 'sheet') {
         title.textContent = sheet ? sheet.title || sheet.name : '(삭제된 시트)';
-        btns.innerHTML = '<button data-iact="filter" class="' + (it.filter ? 'on' : '') + '" title="필터로 사용 (클릭한 값으로 다른 시트 필터링)">⛃</button><button data-iact="menu" title="메뉴">⋮</button><button data-iact="remove" title="제거">×</button>';
+        btns.innerHTML = '<button data-iact="filter" class="' + (it.filter ? 'on' : '') + '" title="필터로 사용 (클릭한 값으로 다른 시트 필터링)">' + BI.ICON.filter + '</button><button data-iact="menu" title="메뉴">' + BI.ICON.more + '</button><button data-iact="remove" title="제거">' + BI.ICON.x + '</button>';
         const bd = BI.$('.di-bd', el);
         if (sheet) {
           const conds = sel && sel.src !== it.id && sel.dsId === sheet.dsId ? sel.conds : null;
@@ -107,7 +107,7 @@
         }
       } else {
         title.textContent = '텍스트';
-        btns.innerHTML = '<button data-iact="edit" title="편집">✎</button><button data-iact="remove" title="제거">×</button>';
+        btns.innerHTML = '<button data-iact="edit" title="편집">' + BI.ICON.edit + '</button><button data-iact="remove" title="제거">' + BI.ICON.x + '</button>';
         const hh = BI.$('.html-host', el);
         BI.$('.chart-host', el).style.display = 'none';
         BI.$('.empty-host', el).style.display = 'none';
