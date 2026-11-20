@@ -23,6 +23,7 @@
   /* ---------- 필 생성 ---------- */
   App.makePill = function (f) {
     const p = { id: BI.uid('p'), f: f.id, agg: null };
+    if (f.aggCalc) { p.agg = 'AGG'; return p; }
     if (f.role === 'measure') p.agg = f.id === '__count' ? 'SUM' : f.type === 'number' ? f.defAgg || 'SUM' : 'COUNTD';
     else if (f.type === 'date') p.dp = 'year';
     return p;
@@ -133,7 +134,7 @@
     const f = D.fieldById(ds, p.f);
     let cls = p.agg ? 'mea' : Q.isTimeline(p, ds) ? 'dim cont' : 'dim';
     if (!f) cls += ' bad';
-    const sortIco = p.sort === 'asc' ? '↑' : p.sort === 'desc' ? '↓' : p.sort === 'mdesc' ? '⇣' : p.sort === 'masc' ? '⇡' : '';
+    const sortIco = p.sort === 'asc' ? '↑' : p.sort === 'desc' ? '↓' : p.sort === 'mdesc' ? '⇣' : p.sort === 'masc' ? '⇡' : p.sort === 'manual' ? '≡' : p.sort === 'field' ? (p.sortField && p.sortField.dir === 'asc' ? '⇡' : '⇣') : '';
     const ico = PILL_ICON[shelf] || '';
     return '<div class="pill ' + cls + '" draggable="true" data-shelf="' + shelf + '" data-idx="' + idx + '" title="' + BI.esc(Q.pillLabel(p, ds)) + '">' +
       (ico ? '<span class="pi">' + ico + '</span>' : '') + '<span class="pt">' + BI.esc(Q.pillLabel(p, ds)) + '</span>' + (sortIco ? '<span class="ps">' + sortIco + '</span>' : '') + '<span class="pc">' + BI.ICON.chev + '</span></div>';
@@ -145,7 +146,7 @@
     let desc = '';
     if (flt.type === 'list') desc = flt.values == null ? '전체' : (flt.exclude ? '제외 ' : '') + flt.values.length + '개';
     else if (flt.type === 'range') desc = (flt.min != null && flt.min !== '' ? BI.compact(+flt.min) : '…') + ' ~ ' + (flt.max != null && flt.max !== '' ? BI.compact(+flt.max) : '…');
-    else if (flt.type === 'date') desc = (flt.from ? BI.fmtDate(flt.from) : '…') + ' ~ ' + (flt.to ? BI.fmtDate(flt.to) : '…');
+    else if (flt.type === 'date') desc = flt.rel ? Q.relLabel(flt.rel) : (flt.from ? BI.fmtDate(flt.from) : '…') + ' ~ ' + (flt.to ? BI.fmtDate(flt.to) : '…');
     else if (flt.type === 'top') desc = (flt.dir === 'bottom' ? '하위 ' : '상위 ') + flt.n;
     return '<div class="pill flt' + (flt.global ? ' global' : '') + (f ? '' : ' bad') + '" draggable="true" data-shelf="filters" data-flt="' + flt.id + '" title="' + BI.esc(nm + ': ' + desc + (flt.global ? '\n(모든 시트에 적용)' : '')) + '">' +
       (flt.global ? '<span class="pi">' + BI.ICON.globe + '</span>' : '') + '<span class="pt">' + BI.esc(nm) + '</span><span class="pd">' + BI.esc(desc) + '</span><span class="pc">' + BI.ICON.chev + '</span></div>';
@@ -182,7 +183,12 @@
     if (['table', 'hltable'].includes(type)) h += chk('totals', '총계 표시');
     if (['line', 'area', 'stackarea', 'dualline'].includes(type)) h += chk('smooth', '부드러운 선');
     if (['scatter', 'bubble'].includes(type)) h += chk('trend', '추세선 (선형)');
-    if (['bar', 'hbar', 'line', 'area'].includes(type)) h += chk('refLine', '평균 참조선');
+    if (['bar', 'hbar', 'line', 'area', 'groupbar', 'stackbar', 'stackhbar', 'combo', 'dualline'].includes(type)) {
+      h += chk('refLine', '참조선');
+      if (o.refLine) h += '<div class="opt-row"><span>참조선 종류</span><select data-opt="refKind">' + [['avg', '평균'], ['median', '중앙값'], ['const', '상수 (목표값)']].map(([k, n]) => '<option value="' + k + '"' + ((o.refKind || 'avg') === k ? ' selected' : '') + '>' + n + '</option>').join('') + '</select></div>' +
+        (o.refKind === 'const' ? '<div class="opt-row"><span>값</span><input type="number" data-opt="refConst" value="' + (o.refConst ?? '') + '"></div><div class="opt-row"><span>이름</span><input data-opt="refName" value="' + BI.esc(o.refName || '') + '" placeholder="목표"></div>' : '');
+    }
+    if (['bar', 'hbar', 'line', 'area', 'groupbar', 'stackbar', 'stackhbar', 'stackarea'].includes(type)) h += '<label class="chk"><input type="checkbox" data-opt="measurePanels"' + (o.measurePanels !== false ? ' checked' : '') + '> 측정값별 축 나누기 (측정값이 여럿일 때)</label>';
     if (type === 'kpi') h += '<label class="chk"><input type="checkbox" data-opt="kpiLatest"' + (o.kpiLatest !== false ? ' checked' : '') + '> 마지막 기간 값 표시</label>';
     const fs = String(o.fontScale || 1);
     h += '<div class="opt-row"><span>글자 크기</span><div class="seg xs" role="group" aria-label="글자 크기">' + [['0.85', '작게', 11], ['1', '보통', 12.5], ['1.2', '크게', 14], ['1.45', '아주 크게', 16]].map(([v, n, px]) => '<button type="button" data-optset="fontScale" data-v="' + v + '" class="' + (fs === v ? 'on' : '') + '" title="' + n + '" style="font-size:' + px + 'px">가</button>').join('') + '</div></div>';
@@ -204,8 +210,9 @@
     h += '<div class="opt-sub">값 · 색상</div>';
     h += '<div class="opt-row"><span>숫자 형식</span><select data-opt="numFmt">' + BI.NUM_FORMATS.map(([k, n]) => '<option value="' + k + '"' + (o.numFmt === k ? ' selected' : '') + '>' + n + '</option>').join('') + '</select></div>';
     h += '<div class="opt-row"><span>색상 팔레트</span><select data-opt="palette">' + Object.keys(BI.PALETTES).map((k) => '<option value="' + k + '"' + (o.palette === k ? ' selected' : '') + '>' + BI.PALETTE_NAMES[k] + '</option>').join('') + '</select></div>';
-    h += '<div class="opt-row"><span>연속 색상</span><select data-opt="seq">' + Object.keys(BI.SEQ).map((k) => '<option value="' + k + '"' + (o.seq === k ? ' selected' : '') + '>' + BI.SEQ_NAMES[k] + '</option>').join('') + '</select></div>';
-    if (type === 'histogram') h += '<div class="opt-row"><span>구간 수</span><input type="number" min="2" max="200" data-opt="bins" value="' + (o.bins || '') + '" placeholder="자동"></div>';
+    h += '<div class="opt-row"><span>연속 색상</span><select data-opt="seq">' + Object.keys(BI.SEQ).map((k) => '<option value="' + k + '"' + (o.seq === k ? ' selected' : '') + '>' + (k === 'diverge' && BI.koreanColors() ? '발산(파랑-빨강, 한국식)' : BI.SEQ_NAMES[k]) + '</option>').join('') + '</select></div>';
+    if (type === 'histogram') h += '<div class="opt-row"><span>구간 수</span><input type="number" min="2" max="200" data-opt="bins" value="' + (o.bins || '') + '" placeholder="자동"></div><div class="opt-row"><span>구간 크기</span><input type="number" min="0" data-opt="binSize" value="' + (o.binSize || '') + '" placeholder="자동 (예: 10000000)"></div>';
+    if (type === 'waterfall') h += '<div class="opt-row"><span>합계 막대 이름</span><input data-opt="wfTotalName" value="' + BI.esc(o.wfTotalName || '') + '" placeholder="합계"></div>';
     if (type === 'gauge') h += '<div class="opt-row"><span>최대값</span><input type="number" data-opt="gaugeMax" value="' + (o.gaugeMax || '') + '" placeholder="자동"></div>';
     h += '</div></div>';
     pane.innerHTML = h;
@@ -238,7 +245,7 @@
     if (out && sb) {
       const marks = out.ctx && out.ctx.res ? out.ctx.res.rows.length : 0;
       const dsr = App.ds(sh.dsId);
-      sb.innerHTML = '<span>' + (out.rows ? out.rows.length.toLocaleString() : 0) + ' / ' + (dsr ? dsr.rows.length.toLocaleString() : 0) + '행</span><span>' + marks.toLocaleString() + '개 마크</span>' + (out.type ? '<span>' + BI.esc((CH.byId[out.type] || {}).name || '') + (sh.chartType === 'auto' ? ' (자동)' : '') + '</span>' : '') + '<span class="muted">' + Math.round(out.ms || 0) + 'ms</span><span class="grow"></span><span id="saveState" class="muted"></span>';
+      sb.innerHTML = '<span>' + (out.rows ? out.rows.length.toLocaleString() : 0) + ' / ' + (dsr ? dsr.rows.length.toLocaleString() : 0) + '행</span><span>' + marks.toLocaleString() + '개 마크</span>' + (out.type ? '<span>' + BI.esc((CH.byId[out.type] || {}).name || '') + (sh.chartType === 'auto' ? ' (자동)' : '') + '</span>' : '') + (out.ctx && out.ctx.nullExcluded ? '<span class="warn-txt" title="날짜가 비어 있는 행은 축에 그리지 않았어요. 필터의 Null 옵션으로 조정할 수 있어요.">Null ' + out.ctx.nullExcluded.toLocaleString() + '건 제외</span>' : '') + '<span class="muted">' + Math.round(out.ms || 0) + 'ms</span><span class="grow"></span><span id="saveState" class="muted">' + BI.esc(App.ui.saveLabel || '') + '</span>';
     } else if (sb) sb.innerHTML = '';
     // 자동 모드일 때 서식 옵션이 달라질 수 있으므로 갱신
     if (sh.chartType === 'auto' && out && out.type !== App.ui.lastAutoType) {
@@ -297,7 +304,7 @@
     }
     h += '<div id="qfCards"></div>';
     pane.innerHTML = h;
-    if (cards.length && ds) App.renderFilterCards(BI.$('#qfCards', pane), cards, ds, () => App.renderSheetView(sh));
+    if (cards.length && ds) App.renderFilterCards(BI.$('#qfCards', pane), cards, ds, () => { App.renderSheetView(sh); renderCards(sh); });
   }
 
   /* ---------- 빠른 필터 카드 (시트/대시보드 공용) ---------- */
@@ -307,10 +314,9 @@
     return g ? { f: g, sheet: null } : null;
   };
   App.lightCommit = function (fn, after) {
-    const before = JSON.stringify({ sheets: App.state.sheets, dashboards: App.state.dashboards, globalFilters: App.state.globalFilters, tabs: App.state.tabs, active: App.state.active });
+    const before = App.snap();
     fn();
-    App.undo.push(before);
-    App.redo = [];
+    App.pushUndo(before);
     App.renderToolbar();
     after && after();
     App.autosave();
@@ -376,8 +382,9 @@
         BI.$$('input[type=number]', bd).forEach((i) => (i.onchange = apply));
         BI.$('.qf-slider', bd).oninput = BI.debounce((e) => { BI.$('[data-k=min]', bd).value = Math.round(+e.target.value * 100) / 100; apply(); }, 150);
       } else if (flt.type === 'date') {
-        bd.innerHTML = '<div class="qf-range"><input type="date" data-k="from" value="' + BI.dateInputValue(flt.from) + '"><span>~</span><input type="date" data-k="to" value="' + BI.dateInputValue(flt.to) + '"></div>';
-        BI.$$('input', bd).forEach((i) => (i.onchange = () => commit(() => { flt.from = BI.parseDateInput(BI.$('[data-k=from]', bd).value); flt.to = BI.parseDateInput(BI.$('[data-k=to]', bd).value, true); })));
+        const rr = flt.rel ? Q.relativeRange(flt, ds) : null;
+        bd.innerHTML = (flt.rel ? '<div class="muted">' + BI.esc(Q.relLabel(flt.rel)) + ' (데이터 마지막 날짜 기준)</div>' : '') + '<div class="qf-range"><input type="date" data-k="from" value="' + BI.dateInputValue(rr ? rr[0] : flt.from) + '"><span>~</span><input type="date" data-k="to" value="' + BI.dateInputValue(rr ? rr[1] : flt.to) + '"></div>';
+        BI.$$('input', bd).forEach((i) => (i.onchange = () => commit(() => { flt.rel = null; flt.from = BI.parseDateInput(BI.$('[data-k=from]', bd).value); flt.to = BI.parseDateInput(BI.$('[data-k=to]', bd).value, true); })));
       } else if (flt.type === 'top') {
         bd.innerHTML = '<div class="qf-range"><select data-k="dir"><option value="top">상위</option><option value="bottom"' + (flt.dir === 'bottom' ? ' selected' : '') + '>하위</option></select><input type="number" min="1" data-k="n" value="' + (flt.n || 10) + '"></div>';
         BI.$$('input,select', bd).forEach((i) => (i.onchange = () => commit(() => { flt.n = +BI.$('[data-k=n]', bd).value || 10; flt.dir = BI.$('[data-k=dir]', bd).value; })));
@@ -388,7 +395,7 @@
   function resetFilter(flt) {
     if (flt.type === 'list') { flt.values = null; flt.exclude = false; }
     if (flt.type === 'range') { flt.min = null; flt.max = null; }
-    if (flt.type === 'date') { flt.from = null; flt.to = null; }
+    if (flt.type === 'date') { flt.from = null; flt.to = null; flt.rel = null; }
   }
   App.sheetForDs = (dsId) => App.state.sheets.find((s) => s.dsId === dsId) || App.newSheet(dsId);
 
@@ -401,9 +408,30 @@
       if (t.id === 'dsSelect') {
         const id = t.value;
         const used = sh.shelves.columns.length + sh.shelves.rows.length + sh.filters.length + ['color', 'size', 'label'].filter((k) => sh.shelves[k]).length + sh.shelves.detail.length + sh.shelves.tooltip.length;
-        const go = () => App.mutate(() => { sh.dsId = id; sh.shelves = { columns: [], rows: [], color: null, size: null, label: null, detail: [], tooltip: [] }; sh.filters = []; });
-        if (used) BI.confirm('데이터 원본을 바꾸면 현재 시트의 필드 배치가 초기화됩니다. 계속할까요?', go);
-        else go();
+        // 같은 이름의 필드는 새 데이터 원본의 필드로 다시 연결, 없는 필드만 제거
+        const from = App.ds(sh.dsId), to = App.ds(id);
+        const remap = (q) => {
+          if (!q) return null;
+          if (q.f === '__count') return q;
+          const of = from && D.fieldById(from, q.f);
+          const nf = of && to && to.fields.find((x) => x.name === of.name);
+          if (!nf) return null;
+          q.f = nf.id;
+          if (q.tcDims) q.tcDims = q.tcDims.map((k) => (k.split('@')[0] === of.id ? nf.id + k.slice(of.id.length) : k));
+          if (q.sortField && q.sortField.f !== '__count') { const sf = from && D.fieldById(from, q.sortField.f); const nsf = sf && to.fields.find((x) => x.name === sf.name); if (nsf) q.sortField.f = nsf.id; else { delete q.sort; delete q.sortField; } }
+          return q;
+        };
+        let lost = 0;
+        const go = () => App.mutate(() => {
+          const S = sh.shelves;
+          ['columns', 'rows', 'detail', 'tooltip'].forEach((k) => { const a = S[k].map(remap); lost += a.filter((x) => !x).length; S[k] = a.filter(Boolean); });
+          ['color', 'size', 'label'].forEach((k) => { if (S[k]) { const q = remap(S[k]); if (!q) lost++; S[k] = q; } });
+          const fl = sh.filters.map(remap); lost += fl.filter((x) => !x).length; sh.filters = fl.filter(Boolean);
+          sh.dsId = id;
+        });
+        const after = () => { go(); if (lost) BI.toast('새 데이터 원본에 같은 이름이 없는 필드 ' + lost + '개는 시트에서 뺐어요.', 'warn'); };
+        if (used) BI.confirm('데이터 원본을 바꾸면 같은 이름의 필드는 새 원본의 필드로 다시 연결하고, 없는 필드는 시트에서 빼요. 계속할까요?', after);
+        else after();
         if (used) t.value = sh.dsId;
         return;
       }
@@ -485,10 +513,22 @@
     const set = (fn) => () => App.mutate(() => fn(p));
     const items = [{ header: Q.pillLabel(p, ds) }];
     if (p.agg) {
-      items.push({ text: '측정값 집계', sub: Q.AGGS.map(([k, n]) => ({ text: n, checked: p.agg === k, onClick: set((q) => (q.agg = k)) })) });
-      items.push({ text: '빠른 테이블 계산', sub: Q.TC.map(([k, n]) => ({ text: n, checked: (p.tc || '') === k, onClick: set((q) => (q.tc = k || null)) })) });
+      if (f && f.aggCalc) items.push({ text: '집계 (계산식에서 지정)', disabled: true });
+      else items.push({ text: '측정값 집계', sub: Q.AGGS.map(([k, n]) => ({ text: n, checked: p.agg === k, onClick: set((q) => (q.agg = k)) })) });
+      const curTc = p.tc === 'running' && p.tcRestart === 'year' ? 'ytd' : p.tc || '';
+      items.push({ text: '빠른 테이블 계산', sub: Q.TC.map(([k, n]) => ({ text: n, checked: curTc === k, onClick: set((q) => App.setTableCalc(q, k)) })) });
+      if (p.tc) {
+        const sdims = sheetDims(sh, ds);
+        const dir = p.tcDir || 'auto';
+        items.push({ text: '다음을 사용하여 계산', sub: Q.TC_DIRS.map(([k, n]) => ({ text: n, checked: dir === k, onClick: set((q) => { q.tcDir = k; delete q.tcDims; }) }))
+          .concat(sdims.length ? [{ sep: true }] : [], sdims.map((d) => ({ text: d.name + ' 기준', checked: dir === 'dims' && (p.tcDims || []).length === 1 && p.tcDims[0] === d.f, onClick: set((q) => { q.tcDir = 'dims'; q.tcDims = [d.f]; }) }))) });
+        items.push({ text: '테이블 계산 편집…', onClick: () => App.editTableCalc(sh, p) });
+      }
       items.push({ text: '숫자 형식', sub: [['', '시트 기본값']].concat(BI.NUM_FORMATS).map(([k, n]) => ({ text: n, checked: (p.fmt || '') === k, onClick: set((q) => (q.fmt = k || null)) })) });
-      if (f && !f.virtual) items.push({ text: '차원으로 변환', onClick: set((q) => { q.agg = null; q.tc = null; q.dp = f.type === 'date' ? 'year' : null; }) });
+      if (f && !f.virtual) items.push({ text: '입력 단위 (원본 값의 단위)', sub: [['', '필드 설정 따름'], ['1', '원 (배율 없음)'], ['1000', '천원'], ['1000000', '백만원'], ['100000000', '억원']].map(([k, n]) => ({ text: n, checked: String(p.unit || '') === k, onClick: set((q) => { if (k) q.unit = +k; else delete q.unit; }) })) });
+      items.push({ text: '이름 바꾸기 (별칭)…', onClick: () => BI.prompt('표시 이름 (비우면 기본 이름)', p.alias || Q.pillLabel(Object.assign({}, p, { tc: null, alias: null }), ds), (v) => App.mutate(() => { if (v === Q.pillLabel(Object.assign({}, p, { tc: null, alias: null }), ds)) delete p.alias; else p.alias = v; })) });
+      if (p.alias) items.push({ text: '별칭 지우기', onClick: set((q) => { delete q.alias; }) });
+      if (f && !f.virtual && !f.aggCalc) items.push({ text: '차원으로 변환', onClick: set((q) => { q.agg = null; q.tc = null; q.dp = f.type === 'date' ? 'year' : null; }) });
     } else if (f) {
       if (f.type === 'date') {
         const cont = Q.DATE_PARTS.filter((d) => d[2]), disc = Q.DATE_PARTS.filter((d) => !d[2]);
@@ -496,11 +536,16 @@
         items.push({ text: '날짜 부분 (불연속)', sub: disc.map(([k, n]) => ({ text: n, checked: p.dp === k, onClick: set((q) => (q.dp = k)) })) });
       }
       const ms = (sh.shelves.columns.concat(sh.shelves.rows).filter(Q.isMeasure));
+      const clr = (q) => { delete q.sortBy; delete q.sortField; delete q.sortList; };
       items.push({ text: '정렬', sub: [
-        { text: '오름차순 (가나다/작은값)', checked: p.sort === 'asc' || !p.sort, onClick: set((q) => (q.sort = 'asc')) },
-        { text: '내림차순', checked: p.sort === 'desc', onClick: set((q) => (q.sort = 'desc')) },
-        { text: '측정값 기준 내림차순' + (ms[0] ? ' (' + Q.pillLabel(ms[0], ds) + ')' : ''), checked: p.sort === 'mdesc', onClick: set((q) => (q.sort = 'mdesc')) },
-        { text: '측정값 기준 오름차순', checked: p.sort === 'masc', onClick: set((q) => (q.sort = 'masc')) },
+        { text: '정렬 안 함 (기본 순서)', checked: !p.sort, onClick: set((q) => { delete q.sort; clr(q); }) },
+        { text: '오름차순 (가나다/작은값)', checked: p.sort === 'asc', onClick: set((q) => { clr(q); q.sort = 'asc'; }) },
+        { text: '내림차순', checked: p.sort === 'desc', onClick: set((q) => { clr(q); q.sort = 'desc'; }) },
+        { text: '측정값 기준 내림차순' + (ms[0] ? ' (' + Q.pillLabel(ms[0], ds) + ')' : ''), checked: p.sort === 'mdesc', onClick: set((q) => { clr(q); q.sort = 'mdesc'; }) },
+        { text: '측정값 기준 오름차순', checked: p.sort === 'masc', onClick: set((q) => { clr(q); q.sort = 'masc'; }) },
+        { sep: true },
+        { text: '다른 필드 기준…' + (p.sort === 'field' && p.sortField ? ' (' + ((D.fieldById(ds, p.sortField.f) || {}).name || '') + ')' : ''), checked: p.sort === 'field', onClick: () => App.sortByFieldDialog(sh, p) },
+        { text: '사용자 지정 순서…', checked: p.sort === 'manual', onClick: () => App.manualSortDialog(sh, p) },
       ] });
       items.push({ text: '측정값으로 변환', sub: [['COUNT', '개수'], ['COUNTD', '고유 개수']].concat(f.type === 'number' ? [['SUM', '합계'], ['AVG', '평균'], ['MIN', '최소값'], ['MAX', '최대값']] : f.type === 'date' ? [['MIN', '최소값(최초)'], ['MAX', '최대값(최근)']] : []).map(([k, n]) => ({ text: n, onClick: set((q) => { q.agg = k; q.dp = null; q.sort = null; }) })) });
     }
@@ -543,12 +588,131 @@
     App.state.globalFilters = App.state.globalFilters.filter((x) => x.id !== id);
   }
 
+  /* 빠른 테이블 계산 지정 (ytd = 연도마다 다시 시작하는 누계) */
+  App.setTableCalc = function (q, k) {
+    q.tc = k || null;
+    if (!k) { delete q.tcDir; delete q.tcDims; delete q.tcN; delete q.tcRestart; return; }
+    if (k === 'ytd') { q.tc = 'running'; q.tcRestart = 'year'; }
+    else if (k === 'running') delete q.tcRestart;
+    if (!['movavg', 'diff', 'pctdiff'].includes(q.tc)) delete q.tcN;
+  };
+  /* 시트에 놓인 차원 필 목록 (계산 방향 선택용) */
+  function sheetDims(sh, ds) {
+    const S = sh.shelves, out = [], seen = new Set();
+    S.columns.concat(S.rows, [S.color, S.size, S.label], S.detail || [], S.tooltip || []).forEach((q) => {
+      const key = q && q.f + (q.dp ? '@' + q.dp : '');
+      if (!q || q.agg || seen.has(key)) return;
+      seen.add(key);
+      out.push({ f: key, name: Q.pillLabel(q, ds) });
+    });
+    return out;
+  }
+  /* 테이블 계산 편집: 유형, 계산 방향(특정 차원), 기간 n, 연도별 다시 시작 */
+  App.editTableCalc = function (sh, p) {
+    const ds = App.ds(sh.dsId);
+    const sdims = sheetDims(sh, ds);
+    const cur = p.tc === 'running' && p.tcRestart === 'year' ? 'ytd' : p.tc || 'running';
+    const dir = p.tcDir || 'auto';
+    const body = BI.h('<div class="pd">' +
+      '<div class="pd-grid"><label>계산 유형<select id="tcT">' + Q.TC.filter((t) => t[0]).map(([k, n]) => '<option value="' + k + '"' + (cur === k ? ' selected' : '') + '>' + BI.esc(n) + '</option>').join('') + '</select></label>' +
+      '<label id="tcNL">기간 / n칸<input type="number" id="tcN" min="1" max="1000" value="' + (+p.tcN || '') + '" placeholder="기본"></label></div>' +
+      '<div class="pd-row"><b>다음을 사용하여 계산</b></div><div class="pd-ops">' +
+      Q.TC_DIRS.map(([k, n]) => '<label class="chk"><input type="radio" name="tcDir" value="' + k + '"' + (dir === k ? ' checked' : '') + '> ' + BI.esc(n) + (k === 'auto' ? ' <span class="muted">(열 차원 → 없으면 행 차원)</span>' : '') + '</label>').join('') +
+      '<label class="chk"><input type="radio" name="tcDir" value="dims"' + (dir === 'dims' ? ' checked' : '') + '> 특정 차원</label></div>' +
+      '<div class="pd-list" id="tcDims">' + (sdims.length ? sdims.map((d) => '<label class="chk"><input type="checkbox" value="' + BI.esc(d.f) + '"' + ((p.tcDims || []).includes(d.f) ? ' checked' : '') + '> ' + BI.esc(d.name) + '</label>').join('') : '<span class="muted">시트에 차원이 없어요</span>') + '</div>' +
+      '<p class="muted">체크한 차원 방향으로 계산하고, 나머지 차원은 구간별로 따로 계산해요. 예) 열=월, 색상=연도에서 <b>연도</b>만 체크하면 같은 월끼리 전년과 비교해요.</p>' +
+      '<label class="chk" id="tcRL"><input type="checkbox" id="tcR"' + (p.tcRestart === 'year' || cur === 'ytd' ? ' checked' : '') + '> 연도마다 다시 시작 (날짜 차원 기준)</label></div>');
+    const sync = () => {
+      const t = BI.$('#tcT', body).value;
+      BI.$('#tcNL', body).style.display = ['movavg', 'diff', 'pctdiff'].includes(t) ? '' : 'none';
+      BI.$('#tcNL', body).firstChild.textContent = t === 'movavg' ? '이동 평균 기간 (기본 3)' : 'n칸 전과 비교 (기본 1)';
+      BI.$('#tcRL', body).style.display = ['running', 'ytd'].includes(t) ? '' : 'none';
+      BI.$('#tcDims', body).style.opacity = BI.$('input[name=tcDir]:checked', body).value === 'dims' ? '1' : '.5';
+    };
+    body.addEventListener('change', sync);
+    sync();
+    BI.modal({
+      title: '테이블 계산 - ' + Q.pillLabel(Object.assign({}, p, { tc: null }), ds), width: 480, body, enterSubmits: false,
+      buttons: [{ text: '취소' }, { text: '확인', primary: true, onClick: () => {
+        const t = BI.$('#tcT', body).value;
+        const d = BI.$('input[name=tcDir]:checked', body).value;
+        const dims = BI.$$('#tcDims input:checked', body).map((x) => x.value);
+        if (d === 'dims' && !dims.length) { BI.toast('계산 방향으로 쓸 차원을 하나 이상 고르세요.', 'err'); return false; }
+        const n = +BI.$('#tcN', body).value || 0;
+        const restart = BI.$('#tcR', body).checked && ['running', 'ytd'].includes(t);
+        App.mutate(() => {
+          App.setTableCalc(p, restart ? 'ytd' : t === 'ytd' ? 'running' : t);
+          if (d === 'auto') delete p.tcDir; else p.tcDir = d;
+          if (d === 'dims') p.tcDims = dims; else delete p.tcDims;
+          if (n && ['movavg', 'diff', 'pctdiff'].includes(p.tc)) p.tcN = n; else delete p.tcN;
+        });
+      } }],
+    });
+  };
+
+  /* 다른 필드(측정값) 기준 정렬: 시트에 없는 필드도 기준으로 쓸 수 있음 */
+  App.sortByFieldDialog = function (sh, p) {
+    const ds = App.ds(sh.dsId);
+    const meas = [D.COUNT_FIELD].concat(ds.fields.filter((x) => x.role === 'measure' || x.type === 'number' || x.aggCalc));
+    const cur = p.sortField || { f: (meas[1] || meas[0]).id, agg: 'SUM', dir: 'desc' };
+    const body = BI.h('<div class="pd"><div class="pd-grid">' +
+      '<label>기준 필드<select id="sfF">' + meas.map((m) => '<option value="' + m.id + '"' + (m.id === cur.f ? ' selected' : '') + '>' + BI.esc(m.name) + '</option>').join('') + '</select></label>' +
+      '<label>집계<select id="sfA">' + Q.AGGS.map(([k, n]) => '<option value="' + k + '"' + (cur.agg === k ? ' selected' : '') + '>' + n + '</option>').join('') + '</select></label>' +
+      '<label>방향<select id="sfD"><option value="desc">내림차순 (큰 값 먼저)</option><option value="asc"' + (cur.dir === 'asc' ? ' selected' : '') + '>오름차순</option></select></label></div>' +
+      '<p class="muted">' + BI.esc(Q.pillLabel(p, ds)) + ' 값을 선택한 필드의 집계값 순서로 정렬해요.</p></div>');
+    BI.modal({ title: '정렬 - 다른 필드 기준', width: 460, body, buttons: [{ text: '취소' }, { text: '확인', primary: true, onClick: () => {
+      const sf = { f: BI.$('#sfF', body).value, agg: BI.$('#sfA', body).value, dir: BI.$('#sfD', body).value };
+      App.mutate(() => { delete p.sortBy; delete p.sortList; p.sort = 'field'; p.sortField = sf; });
+    } }] });
+  };
+  /* 사용자 지정(수동) 순서: 위/아래 버튼 또는 끌어서 순서 지정 */
+  App.manualSortDialog = function (sh, p) {
+    const ds = App.ds(sh.dsId);
+    const uv = Q.uniqueValues(ds, p.f, p.dp).map((u) => u.k);
+    const sk = (k) => typeof k + ':' + k;
+    let list = uv.slice();
+    if (Array.isArray(p.sortList)) {
+      const pos = new Map(p.sortList.map((k, i) => [sk(k), i]));
+      list.sort((a, b) => (pos.has(sk(a)) ? pos.get(sk(a)) : 1e9) - (pos.has(sk(b)) ? pos.get(sk(b)) : 1e9));
+    }
+    if (list.length > 500) return BI.toast('값이 ' + list.length.toLocaleString() + '개라 사용자 지정 순서를 쓸 수 없어요 (500개 이하).', 'warn');
+    const spaced = uv.filter((k) => typeof k === 'string' && k !== k.trim()).length;
+    let cur = 0;
+    const body = BI.h('<div class="pd"><p class="muted">항목을 고른 뒤 위/아래 버튼을 누르거나 끌어서 순서를 바꾸세요.' + (spaced ? ' <span class="warn-txt">앞뒤 공백이 있는 값 ' + spaced + '개가 있어요. 데이터 정리의 <b>값 정리 → 앞뒤 공백 제거</b>로 정리하는 것을 권장해요.</span>' : '') + '</p>' +
+      '<div class="ms-wrap" style="display:flex;gap:8px"><div class="pd-list ms-list" id="msL" style="flex:1;max-height:340px;overflow:auto"></div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px"><button class="btn sm" data-mv="top">맨 위로</button><button class="btn sm" data-mv="-1">위로</button><button class="btn sm" data-mv="1">아래로</button><button class="btn sm" data-mv="bottom">맨 아래로</button><button class="btn sm" data-mv="reset">가나다순</button></div></div></div>');
+    const L = BI.$('#msL', body);
+    const draw = () => {
+      L.innerHTML = list.map((k, i) => '<div class="ci ms-item' + (i === cur ? ' on' : '') + '" draggable="true" data-i="' + i + '" style="padding:4px 8px;cursor:grab;border-radius:6px;' + (i === cur ? 'background:#e3ebfd' : '') + '">' + BI.esc(Q.keyLabel(p, ds, k)) + '</div>').join('');
+      const el = L.children[cur];
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    };
+    const move = (to) => { to = Math.max(0, Math.min(list.length - 1, to)); const [x] = list.splice(cur, 1); list.splice(to, 0, x); cur = to; draw(); };
+    L.onclick = (e) => { const it = e.target.closest('[data-i]'); if (it) { cur = +it.dataset.i; draw(); } };
+    body.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-mv]');
+      if (!b) return;
+      const m = b.dataset.mv;
+      if (m === 'reset') { list = uv.slice(); cur = 0; draw(); return; }
+      move(m === 'top' ? 0 : m === 'bottom' ? list.length - 1 : cur + +m);
+    });
+    let dragI = null;
+    L.addEventListener('dragstart', (e) => { const it = e.target.closest('[data-i]'); if (!it) return; dragI = +it.dataset.i; e.stopPropagation(); try { e.dataTransfer.setData('text/plain', 'ms'); } catch (x) { /* noop */ } });
+    L.addEventListener('dragover', (e) => { if (dragI != null) { e.preventDefault(); e.stopPropagation(); } });
+    L.addEventListener('drop', (e) => { const it = e.target.closest('[data-i]'); if (dragI == null || !it) return; e.preventDefault(); e.stopPropagation(); cur = dragI; move(+it.dataset.i); dragI = null; });
+    draw();
+    BI.modal({ title: '사용자 지정 순서 - ' + Q.pillLabel(p, ds), width: 460, body, enterSubmits: false, buttons: [{ text: '취소' }, { text: '확인', primary: true, onClick: () => {
+      App.mutate(() => { delete p.sortBy; delete p.sortField; p.sort = 'manual'; p.sortList = list.slice(); });
+    } }] });
+  };
+
   /* ---------- 필터 편집 대화상자 ---------- */
   App.editFilter = function (sh, flt, init) {
     if (!sh) return;
     const ds = App.ds(sh.dsId);
     const f = D.fieldById(ds, flt ? flt.f : init.f);
     if (!f || f.virtual) return BI.toast('이 필드는 필터로 사용할 수 없습니다.');
+    if (f.aggCalc) return BI.toast('집계 계산 필드는 필터로 쓸 수 없어요. 상위 N 필터의 기준으로는 쓸 수 있어요.', 'warn');
     const isDate = f.type === 'date', isNum = f.type === 'number';
     const modes = isDate ? ['date', 'list', 'top'] : isNum ? (f.role === 'measure' ? ['range', 'list', 'top'] : ['list', 'range', 'top']) : ['list', 'top'];
     const w = flt ? BI.clone(flt) : { id: BI.uid('fl'), f: f.id, type: isDate ? 'date' : isNum && (f.role === 'measure' || (init && init.agg)) ? 'range' : 'list', dp: isDate ? (init && init.dp) || 'year' : null, values: null, exclude: false, card: false, global: false };
@@ -592,30 +756,45 @@
         const [mn, mx] = Q.fieldRange(ds, f.id);
         panel.innerHTML = '<p class="muted">데이터 범위: ' + BI.formatNumber(mn) + ' ~ ' + BI.formatNumber(mx) + ' (행 단위 값 기준)</p><div class="qf-range big"><input type="number" id="fMin" placeholder="최소" value="' + (w.type === 'range' && w.min != null ? w.min : '') + '"><span>~</span><input type="number" id="fMax" placeholder="최대" value="' + (w.type === 'range' && w.max != null ? w.max : '') + '"></div><label class="chk"><input type="checkbox" id="fNull"' + (w.excludeNull ? ' checked' : '') + '> Null 값 제외</label>';
       } else if (mode === 'date') {
-        let mn = null, mx = null;
-        for (const r of ds.rows) { const v = r[f.id]; if (v == null) continue; if (mn == null || v < mn) mn = v; if (mx == null || v > mx) mx = v; }
-        const pre = [['all', '전체'], ['7', '최근 7일'], ['30', '최근 30일'], ['90', '최근 90일'], ['ytd', '올해 (YTD)'], ['ly', '작년'], ['12m', '최근 12개월'], ['qtd', '이번 분기']];
-        panel.innerHTML = '<p class="muted">데이터 기간: ' + BI.fmtDate(mn) + ' ~ ' + BI.fmtDate(mx) + '<br>빠른 선택은 데이터의 마지막 날짜를 기준으로 계산합니다.</p><div class="presets">' + pre.map(([k, n]) => '<button class="btn sm" data-p="' + k + '">' + n + '</button>').join('') + '</div><div class="qf-range big"><input type="date" id="fFrom" value="' + (w.type === 'date' ? BI.dateInputValue(w.from) : '') + '"><span>~</span><input type="date" id="fTo" value="' + (w.type === 'date' ? BI.dateInputValue(w.to) : '') + '"></div>';
+        let mn = null, mx = null, nn = 0;
+        for (const r of ds.rows) { const v = r[f.id]; if (v == null) { nn++; continue; } if (mn == null || v < mn) mn = v; if (mx == null || v > mx) mx = v; }
+        // 상대 기간: 저장은 규칙(최근 N일 등)으로, 계산은 매번 데이터의 마지막 날짜 기준
+        const pre = [['all', '전체'], ['day:7', '최근 7일'], ['day:30', '최근 30일'], ['day:90', '최근 90일'], ['month:3', '최근 3개월'], ['month:12', '최근 12개월'], ['ytd', '올해 (YTD)'], ['qtd', '이번 분기'], ['mtd', '이번 달'], ['ly', '작년']];
+        let rel = w.type === 'date' && w.rel ? Object.assign({}, w.rel) : null;
+        const relTxt = () => (rel ? '<b>' + BI.esc(Q.relLabel(rel)) + '</b> — 데이터를 바꿔도 마지막 날짜 기준으로 다시 계산해요.' : '고정 기간');
+        panel.innerHTML = '<p class="muted">데이터 기간: ' + BI.fmtDate(mn) + ' ~ ' + BI.fmtDate(mx) + (nn ? ' · Null ' + nn.toLocaleString() + '건' : '') + '<br>빠른 선택은 데이터의 마지막 날짜를 기준으로 계산합니다.</p><div class="presets">' + pre.map(([k, n]) => '<button class="btn sm" data-p="' + k + '">' + n + '</button>').join('') + '</div>' +
+          '<div class="opt-row"><span>상대 기간</span><span id="fRel">' + relTxt() + '</span></div>' +
+          '<div class="pd-grid"><label>최근<input type="number" id="fRelN" min="1" value="' + (rel && rel.n ? rel.n : '') + '" placeholder="N" style="width:70px"></label><label>단위<select id="fRelU">' + [['day', '일'], ['week', '주'], ['month', '개월'], ['year', '년']].map(([k, n]) => '<option value="' + k + '"' + (rel && rel.unit === k ? ' selected' : '') + '>' + n + '</option>').join('') + '</select></label></div>' +
+          '<div class="qf-range big"><input type="date" id="fFrom" value="' + (w.type === 'date' ? BI.dateInputValue(w.from) : '') + '"><span>~</span><input type="date" id="fTo" value="' + (w.type === 'date' ? BI.dateInputValue(w.to) : '') + '"></div>' +
+          '<div class="opt-row"><span>Null 날짜</span><select id="fNulls"><option value="auto">기간을 정하면 제외 (기본)</option><option value="include"' + (w.nulls === 'include' ? ' selected' : '') + '>항상 포함</option><option value="exclude"' + (w.nulls === 'exclude' ? ' selected' : '') + '>항상 제외</option></select></div>';
+        const showRange = () => {
+          const rr = rel ? Q.relativeRange({ f: f.id, rel }, ds) : null;
+          if (rr) { BI.$('#fFrom', panel).value = BI.dateInputValue(rr[0]); BI.$('#fTo', panel).value = BI.dateInputValue(rr[1]); }
+          BI.$('#fRel', panel).innerHTML = relTxt();
+        };
         BI.$('.presets', panel).onclick = (e) => {
           const b = e.target.closest('[data-p]');
           if (!b || mx == null) return;
-          const end = new Date(mx);
-          const DP = BI.Calc.DP;
-          let from = null, to = mx;
-          switch (b.dataset.p) {
-            case 'all': from = null; to = null; break;
-            case '7': case '30': case '90': from = DP.add('day', -(+b.dataset.p - 1), DP.trunc('day', mx)); break;
-            case 'ytd': from = new Date(end.getFullYear(), 0, 1).getTime(); break;
-            case 'ly': from = new Date(end.getFullYear() - 1, 0, 1).getTime(); to = new Date(end.getFullYear() - 1, 11, 31).getTime(); break;
-            case '12m': from = DP.add('month', -12, DP.trunc('day', mx)) + 86400000; break;
-            case 'qtd': from = DP.trunc('quarter', mx); break;
-          }
-          BI.$('#fFrom', panel).value = BI.dateInputValue(from);
-          BI.$('#fTo', panel).value = BI.dateInputValue(to);
+          const k = b.dataset.p;
+          if (k === 'all') { rel = null; BI.$('#fFrom', panel).value = ''; BI.$('#fTo', panel).value = ''; BI.$('#fRel', panel).innerHTML = relTxt(); return; }
+          const [u, n] = k.split(':');
+          rel = n ? { unit: u, n: +n } : { unit: u };
+          BI.$('#fRelN', panel).value = n || '';
+          if (n) BI.$('#fRelU', panel).value = u;
+          showRange();
         };
+        const relInput = () => { const n = +BI.$('#fRelN', panel).value; if (n > 0) { rel = { unit: BI.$('#fRelU', panel).value, n }; showRange(); } };
+        BI.$('#fRelN', panel).oninput = relInput;
+        BI.$('#fRelU', panel).onchange = relInput;
+        // 날짜를 직접 고치면 고정 기간으로
+        ['#fFrom', '#fTo'].forEach((id) => (BI.$(id, panel).oninput = () => { rel = null; BI.$('#fRel', panel).innerHTML = relTxt(); }));
+        panel._rel = () => rel;
       } else if (mode === 'top') {
-        const meas = [D.COUNT_FIELD].concat(ds.fields.filter((x) => x.type === 'number'));
-        const by = w.by || { f: (meas[1] || meas[0]).id, agg: 'SUM' };
+        const meas = [D.COUNT_FIELD].concat(ds.fields.filter((x) => x.type === 'number' || x.aggCalc));
+        // 기본 기준: 시트에 놓인 첫 측정값 → 측정값 역할의 첫 필드(코드·번호 같은 숫자 차원 제외) → 레코드 수
+        const onSheet = sh.shelves.columns.concat(sh.shelves.rows, [sh.shelves.size, sh.shelves.color, sh.shelves.label]).find((q) => q && q.agg && meas.some((m) => m.id === q.f));
+        const firstMeas = ds.fields.find((x) => x.role === 'measure' && (x.type === 'number' || x.aggCalc));
+        const by = w.by || (onSheet ? { f: onSheet.f, agg: onSheet.agg === 'AGG' ? 'SUM' : onSheet.agg } : { f: firstMeas ? firstMeas.id : '__count', agg: 'SUM' });
         panel.innerHTML = '<div class="top-row"><select id="fDir"><option value="top">상위</option><option value="bottom"' + (w.dir === 'bottom' ? ' selected' : '') + '>하위</option></select><input type="number" id="fN" min="1" value="' + (w.n || 10) + '"><span>개, 기준:</span><select id="fAgg">' + Q.AGGS.map(([k, n]) => '<option value="' + k + '"' + (by.agg === k ? ' selected' : '') + '>' + n + '</option>').join('') + '</select><select id="fBy">' + meas.map((m) => '<option value="' + m.id + '"' + (by.f === m.id ? ' selected' : '') + '>' + BI.esc(m.name) + '</option>').join('') + '</select></div>' +
           (isDate ? '<div class="opt-row"><span>날짜 부분</span><select id="fDp2">' + Q.DATE_PARTS.map(([k, n]) => '<option value="' + k + '"' + (w.dp === k ? ' selected' : '') + '>' + n + '</option>').join('') + '</select></div>' : '') +
           '<p class="muted">' + BI.esc(f.name) + ' 값 중 기준 측정값이 가장 큰(작은) N개만 남깁니다. 다른 필터가 먼저 적용됩니다.</p>';
@@ -644,6 +823,10 @@
             } else if (mode === 'date') {
               nw.from = BI.parseDateInput(BI.$('#fFrom', body).value);
               nw.to = BI.parseDateInput(BI.$('#fTo', body).value, true);
+              const rel = panel._rel && panel._rel();
+              if (rel) nw.rel = rel;
+              const nl = BI.$('#fNulls', body).value;
+              if (nl !== 'auto') nw.nulls = nl;
             } else if (mode === 'top') {
               nw.n = +BI.$('#fN', body).value || 10;
               nw.dir = BI.$('#fDir', body).value;
@@ -673,22 +856,22 @@
     const f = D.fieldById(ds, fid);
     if (!f) return;
     const sh = App.activeSheet();
-    const after = () => { App.refresh(); App.autosave(); };
     const items = [{ header: f.name }];
     if (sh && sh.dsId === ds.id) items.push({ text: '시트에 추가', onClick: () => App.autoAdd(sh, f) });
     if (!f.virtual) {
       items.push({ text: '이름 바꾸기…', onClick: () => App.renameField(ds, f) });
-      items.push({ text: '복제', onClick: () => { addCalcField(ds, uniqueName(ds, f.name + ' (복사)'), '[' + f.name + ']'); after(); } });
+      items.push({ text: '복제', onClick: () => App.mutateData(() => { addCalcField(ds, uniqueName(ds, f.name + ' (복사)'), f.aggCalc ? f.calc : '[' + f.name + ']'); }) });
       if (f.calc) {
         items.push({ text: '계산 편집…', onClick: () => App.editCalc(ds, f) });
       } else {
-        items.push({ text: '데이터 유형 변경', sub: [['string', '문자열'], ['number', '숫자'], ['date', '날짜'], ['bool', '부울']].map(([k, n]) => ({ text: n, checked: f.type === k, onClick: () => { App.setFieldType(ds, f, k); after(); } })) });
+        items.push({ text: '데이터 유형 변경', sub: [['string', '문자열'], ['number', '숫자'], ['date', '날짜'], ['bool', '부울']].map(([k, n]) => ({ text: n, checked: f.type === k, onClick: () => App.mutateData(() => { App.setFieldType(ds, f, k); }) })) });
       }
-      items.push(f.role === 'measure' ? { text: '차원으로 변환', onClick: () => { f.role = 'dimension'; after(); } } : { text: '측정값으로 변환', onClick: () => { f.role = 'measure'; after(); } });
-      if (f.role === 'measure' && f.type === 'number') items.push({ text: '기본 집계', sub: Q.AGGS.map(([k, n]) => ({ text: n, checked: (f.defAgg || 'SUM') === k, onClick: () => { f.defAgg = k; after(); } })) });
+      if (!f.aggCalc) items.push(f.role === 'measure' ? { text: '차원으로 변환', onClick: () => App.mutateData(() => { f.role = 'dimension'; }) } : { text: '측정값으로 변환', onClick: () => App.mutateData(() => { f.role = 'measure'; }) });
+      if (f.type === 'number' || f.aggCalc) items.push({ text: '입력 단위', sub: BI.UNITS.map(([k, n]) => ({ text: n, checked: String(f.unit || '') === k, onClick: () => App.mutateData(() => { if (k) f.unit = +k; else delete f.unit; }) })) });
+      if (f.role === 'measure' && f.type === 'number') items.push({ text: '기본 집계', sub: Q.AGGS.map(([k, n]) => ({ text: n, checked: (f.defAgg || 'SUM') === k, onClick: () => App.mutateData(() => { f.defAgg = k; }) })) });
       if (sh && sh.dsId === ds.id) items.push({ text: '필터 추가…', onClick: () => App.editFilter(sh, null, { f: f.id }) });
       items.push({ sep: true });
-      items.push({ text: f.calc ? '계산된 필드 삭제' : '필드 삭제', onClick: () => BI.confirm('"' + f.name + '" 필드를 삭제할까요? 이 필드를 사용하는 시트 구성도 제거됩니다.', () => { App.deleteField(ds, f); after(); }) });
+      items.push({ text: f.calc ? '계산된 필드 삭제' : '필드 삭제', onClick: () => BI.confirm('"' + f.name + '" 필드를 삭제할까요? 이 필드를 사용하는 시트 구성도 제거됩니다.', () => App.mutateData(() => { App.deleteField(ds, f); })) });
     }
     BI.menu(x, y, items);
   };
@@ -699,7 +882,7 @@
   }
   function addCalcField(ds, name, expr) {
     const c = BI.Calc.compile(expr, ds);
-    const f = { id: BI.uid('c'), name, calc: expr, type: c.type, role: c.type === 'number' ? 'measure' : 'dimension' };
+    const f = { id: BI.uid('c'), name, calc: expr, type: c.type, role: c.isAgg || c.type === 'number' ? 'measure' : 'dimension' };
     ds.fields.push(f);
     D.applyCalcs(ds);
     return f;
@@ -708,22 +891,31 @@
     BI.prompt('필드 이름 바꾸기', f.name, (v) => {
       if (v !== f.name && ds.fields.some((x) => x !== f && x.name.toLowerCase() === v.toLowerCase())) return BI.toast('같은 이름의 필드가 이미 있습니다.', 'err');
       const old = f.name;
-      ds.fields.forEach((x) => { if (x.calc) x.calc = BI.Calc.renameRef(x.calc, old, v); });
-      if (!f.calc) BI.Prep.record(ds, { t: 'rename', col: old, to: v });
-      f.name = v;
-      App.refresh();
-      App.autosave();
+      App.mutateData(() => {
+        ds.fields.forEach((x) => { if (x.calc) x.calc = BI.Calc.renameRef(x.calc, old, v); });
+        if (!f.calc) BI.Prep.record(ds, { t: 'rename', col: old, to: v });
+        f.name = v;
+      });
     });
   };
   /* 유형 변경: 정리 흐름이 있으면 단계로 기록 후 다시 실행 (부울은 흐름에서 지원하지 않아 직접 변환) */
   App.setFieldType = function (ds, f, k) {
-    if (ds.prep && !f.calc && k !== 'bool') { BI.Prep.record(ds, { t: 'type', col: f.name, to: k }); BI.Prep.rebuild(ds); }
-    else { D.changeType(ds, f, k); D.applyCalcs(ds); }
+    const name = f.name;
+    let fails = 0;
+    // 원본 값을 잃지 않도록 정리 흐름(원본 보관)을 거쳐 변환 (부울은 흐름 미지원이라 직접 변환)
+    if (!f.calc && k !== 'bool') { BI.Prep.ensure(ds); BI.Prep.record(ds, { t: 'type', col: f.name, to: k }); BI.Prep.rebuild(ds); fails = (ds.convFails || {})[name] || 0; }
+    else { ds.rows = ds.rows.map((r) => Object.assign({}, r)); fails = D.changeType(ds, f, k) || 0; D.applyCalcs(ds); App.markDataDirty(ds); }
+    const nf = ds.fields.find((x) => x.name === name);
+    const total = ds.rows.length;
+    const nonNull = nf ? ds.rows.reduce((a, r) => a + (r[nf.id] != null ? 1 : 0), 0) : 0;
+    const tn = { string: '문자열', number: '숫자', date: '날짜', bool: '부울' }[k] || k;
+    if (fails) BI.toast('"' + name + '"을(를) ' + tn + '(으)로 바꾸면서 ' + fails.toLocaleString() + '건을 변환하지 못해 Null이 됐어요' + (nonNull === 0 && total ? ' (모든 값이 Null)' : '') + '. Ctrl+Z로 되돌리거나 원래 유형으로 다시 바꾸면 원본 값이 돌아와요.', 'warn');
+    return fails;
   };
   App.deleteField = function (ds, f) {
     if (!f.calc) BI.Prep.record(ds, { t: 'remove', cols: [f.name] });
     ds.fields = ds.fields.filter((x) => x !== f);
-    ds.rows.forEach((r) => delete r[f.id]);
+    // 행 값은 지우지 않음 (실행 취소 시 그대로 되살리기 위해 — 행 배열은 스냅샷과 공유)
     const keep = (p) => p && p.f !== f.id;
     App.state.sheets.filter((s) => s.dsId === ds.id).forEach((s) => {
       ['columns', 'rows', 'detail', 'tooltip'].forEach((k) => (s.shelves[k] = s.shelves[k].filter(keep)));
@@ -738,7 +930,8 @@
     ds = ds || App.currentDs();
     if (!ds) return BI.toast('먼저 데이터 원본을 추가하세요.');
     const fnames = Object.keys(BI.Calc.FUNCTIONS);
-    const groups = { 숫자: ['ABS', 'ROUND', 'CEILING', 'FLOOR', 'SQRT', 'POWER', 'EXP', 'LN', 'LOG', 'SIGN', 'DIV', 'MIN', 'MAX', 'ZN', 'INT', 'FLOAT', 'PI'], 논리: ['IIF', 'ISNULL', 'IFNULL'], 문자열: ['LEN', 'LEFT', 'RIGHT', 'MID', 'UPPER', 'LOWER', 'TRIM', 'LTRIM', 'RTRIM', 'CONTAINS', 'STARTSWITH', 'ENDSWITH', 'REPLACE', 'FIND', 'SPLIT', 'CONCAT', 'STR'], 날짜: ['YEAR', 'QUARTER', 'MONTH', 'DAY', 'WEEKDAY', 'DATEPART', 'DATETRUNC', 'DATEADD', 'DATEDIFF', 'TODAY', 'NOW', 'MAKEDATE', 'DATE'] };
+    const groups = { 숫자: ['ABS', 'ROUND', 'CEILING', 'FLOOR', 'SQRT', 'POWER', 'EXP', 'LN', 'LOG', 'SIGN', 'DIV', 'MIN', 'MAX', 'ZN', 'INT', 'FLOAT', 'PI'], 논리: ['IIF', 'ISNULL', 'IFNULL'], 문자열: ['LEN', 'LEFT', 'RIGHT', 'MID', 'UPPER', 'LOWER', 'TRIM', 'LTRIM', 'RTRIM', 'CONTAINS', 'STARTSWITH', 'ENDSWITH', 'REPLACE', 'FIND', 'SPLIT', 'CONCAT', 'STR'], 날짜: ['YEAR', 'QUARTER', 'MONTH', 'DAY', 'WEEKDAY', 'DATEPART', 'DATETRUNC', 'DATEADD', 'DATEDIFF', 'TODAY', 'NOW', 'MAKEDATE', 'DATE'], 집계: ['SUM', 'AVG', 'COUNT', 'COUNTD', 'MEDIAN', 'STDEV', 'VAR', 'ATTR', 'FIXED'] };
+    const fnDef = (n) => BI.Calc.FUNCTIONS[n] || BI.Calc.AGG_HELP[n];
     void fnames;
     const body = BI.h('<div class="calc-dlg">' +
       '<div class="calc-top"><input class="inp" id="cName" placeholder="필드 이름" value="' + BI.esc(field ? field.name : uniqueName(ds, '계산1')) + '"></div>' +
@@ -763,9 +956,9 @@
       const c = e.target.closest('.ci');
       if (!c) return;
       if (c.dataset.ins) insert(c.dataset.ins);
-      else { const d = BI.Calc.FUNCTIONS[c.dataset.fn]; insert(c.dataset.fn + '(' + (d[0] === 0 ? ')' : '')); BI.$('#cHelp', body).textContent = d[4]; }
+      else { const d = fnDef(c.dataset.fn); insert(c.dataset.fn === 'FIXED' ? '{FIXED [] : SUM([])}' : c.dataset.fn + '(' + (d[0] === 0 ? ')' : '')); BI.$('#cHelp', body).textContent = d[4]; }
     };
-    BI.$('#cList', body).onmouseover = (e) => { const c = e.target.closest('.ci[data-fn]'); if (c) BI.$('#cHelp', body).textContent = BI.Calc.FUNCTIONS[c.dataset.fn][4]; };
+    BI.$('#cList', body).onmouseover = (e) => { const c = e.target.closest('.ci[data-fn]'); if (c) BI.$('#cHelp', body).textContent = fnDef(c.dataset.fn)[4]; };
     let valid = !!field;
     const validate = BI.debounce(() => {
       const st = BI.$('#cStatus', body), pv = BI.$('#cPrev', body);
@@ -774,8 +967,16 @@
         valid = true;
         st.className = 'calc-status ok';
         st.textContent = '✓ 계산이 유효합니다 · 결과 유형: ' + ({ number: '숫자', string: '문자열', date: '날짜', bool: '부울' }[c.type] || c.type);
-        const vals = ds.rows.slice(0, 6).map((r) => { try { const v = c.fn(r); return v == null ? 'Null' : c.type === 'date' ? BI.fmtDate(v, true) : typeof v === 'number' ? BI.formatNumber(v) : String(v); } catch (e) { return '오류'; } });
-        pv.innerHTML = '<span class="muted">미리보기:</span> ' + vals.map((v) => '<code>' + BI.esc(v) + '</code>').join(' ');
+        const show = (v) => (v == null ? 'Null' : c.type === 'date' ? BI.fmtDate(v, true) : typeof v === 'number' ? BI.formatNumber(v) : String(v));
+        if (c.isAgg) {
+          st.textContent += ' · 집계 계산 (뷰의 차원 수준에서 계산되는 측정값)';
+          const tmp = { fields: ds.fields.concat([{ id: '__tmp', name: '__tmp', calc: ta.value, aggCalc: true, type: c.type }]), rows: ds.rows, id: ds.id };
+          const r = Q.aggregate(tmp, ds.rows, [], [{ f: '__tmp', agg: 'AGG' }]).rows[0];
+          pv.innerHTML = '<span class="muted">전체 데이터 기준 값:</span> <code>' + BI.esc(show(r ? r.m[0] : null)) + '</code>';
+        } else {
+          const vals = ds.rows.slice(0, 6).map((r) => { try { return show(c.fn(r)); } catch (e) { return '오류'; } });
+          pv.innerHTML = '<span class="muted">미리보기:</span> ' + vals.map((v) => '<code>' + BI.esc(v) + '</code>').join(' ');
+        }
       } catch (e) {
         valid = false;
         st.className = 'calc-status err';
@@ -797,16 +998,18 @@
             if (!name) { BI.toast('필드 이름을 입력하세요.', 'err'); return false; }
             if (ds.fields.some((x) => x !== field && x.name.toLowerCase() === name.toLowerCase())) { BI.toast('같은 이름의 필드가 이미 있습니다.', 'err'); return false; }
             try { BI.Calc.compile(expr, ds, field && field.id); } catch (e) { BI.toast('수식 오류: ' + e.message, 'err'); return false; }
+            App.mutateData(() => {
             if (field) {
               if (field.name !== name) ds.fields.forEach((x) => { if (x.calc && x !== field) x.calc = BI.Calc.renameRef(x.calc, field.name, name); });
               field.name = name;
               field.calc = expr;
               const oldType = field.type;
               D.applyCalcs(ds);
-              if (oldType !== field.type) field.role = field.type === 'number' ? 'measure' : 'dimension';
+              if (oldType !== field.type || field.aggCalc) field.role = field.aggCalc || field.type === 'number' ? 'measure' : 'dimension';
+              // 집계 계산으로 바뀐 필드를 쓰는 필은 '집계'로, 반대면 기본 집계로
+              App.state.sheets.forEach((s) => { if (s.dsId !== ds.id) return; const S = s.shelves; S.columns.concat(S.rows, [S.color, S.size, S.label], S.detail, S.tooltip).forEach((q) => { if (!q || q.f !== field.id) return; if (field.aggCalc) q.agg = 'AGG'; else if (q.agg === 'AGG') q.agg = 'SUM'; }); });
             } else addCalcField(ds, name, expr);
-            App.refresh();
-            App.autosave();
+            });
             BI.toast('계산된 필드 "' + name + '" 저장됨', 'ok');
           },
         },
@@ -936,7 +1139,7 @@
       if (d.kind === 'field' && t.matches('.field-list')) {
         const f = D.fieldById(ds, d.fid);
         const role = t.dataset.role;
-        if (f && !f.virtual && f.role !== role) { f.role = role; App.refresh(); App.autosave(); }
+        if (f && !f.virtual && !f.aggCalc && f.role !== role) App.mutateData(() => { f.role = role; });
       }
       return;
     }

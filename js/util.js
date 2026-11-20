@@ -32,39 +32,65 @@
     ['int', '정수 (1,234)'],
     ['dec1', '소수 1자리'],
     ['dec2', '소수 2자리'],
-    ['pct', '백분율 (%)'],
+    ['acct', '회계식 음수 (1,234)'],
+    ['pct', '백분율 (% 자동 자릿수)'],
+    ['pct0', '백분율 (12%)'],
+    ['pct1', '백분율 (12.3%)'],
+    ['pct2', '백분율 (12.34%)'],
     ['krw', '통화 (₩)'],
     ['usd', '통화 ($)'],
     ['k', '천 단위 (K)'],
     ['m', '백만 단위 (M)'],
     ['man', '만 단위'],
     ['eok', '억 단위'],
-    ['compact', '간략 (만/억)'],
+    ['jo', '조 단위'],
+    ['compact', '간략 (만/억/조)'],
   ];
+  /* 원본 입력 단위 (값에 곱해 원 단위로 환산) */
+  BI.UNITS = [['', '원 (그대로)'], ['1000', '천원'], ['1000000', '백만원'], ['100000000', '억원']];
+  // 단위 배율을 적용하는 형식 (억·조 등 금액 단위 표시)
+  const SCALED = { krw: 1, k: 1, m: 1, man: 1, eok: 1, jo: 1, compact: 1 };
+  // 백분율 자동 자릿수: 큰 값은 1자리, 1% 미만은 2자리, 0에 가까우면 0% (-0% 방지)
+  const pctAuto = (v) => {
+    const x = v * 100, a = Math.abs(x);
+    const d = a >= 10 ? 1 : a >= 1 ? 1 : 2;
+    const r = Math.round(x * Math.pow(10, d)) / Math.pow(10, d);
+    return nf(0, d).format(r === 0 ? 0 : r) + '%';
+  };
+  const noNegZero = (s) => (/^-0([.,]0*)?%?$/.test(s.replace(/[^\d.,%-]/g, '')) ? s.replace('-', '') : s);
 
   BI.formatNumber = function (v, fmt) {
     if (v == null || v === '' || (typeof v === 'number' && !isFinite(v))) return '';
     if (typeof v !== 'number') return String(v);
+    // 'eok@1000000' = 백만원 단위 원본을 억 단위로 표시
+    if (fmt && fmt.indexOf('@') > 0) { const [f, sc] = fmt.split('@'); fmt = f; if (SCALED[f]) v = v * (+sc || 1); }
+    let out;
     switch (fmt) {
-      case 'int': return nf(0, 0).format(v);
-      case 'dec1': return nf(1, 1).format(v);
-      case 'dec2': return nf(2, 2).format(v);
-      case 'pct': return nf(0, 1).format(v * 100) + '%';
-      case 'krw': return '₩' + nf(0, 0).format(v);
-      case 'usd': return '$' + nf(0, 2).format(v);
-      case 'k': return nf(0, 1).format(v / 1e3) + 'K';
-      case 'm': return nf(0, 2).format(v / 1e6) + 'M';
-      case 'man': return nf(0, 1).format(v / 1e4) + '만';
-      case 'eok': return nf(0, 2).format(v / 1e8) + '억';
-      case 'compact': return BI.compact(v);
+      case 'int': out = nf(0, 0).format(v); break;
+      case 'dec1': out = nf(1, 1).format(v); break;
+      case 'dec2': out = nf(2, 2).format(v); break;
+      case 'acct': { const a = nf(0, 0).format(Math.abs(v)); out = v < 0 && a !== '0' ? '(' + a + ')' : a; break; }
+      case 'pct': return pctAuto(v);
+      case 'pct0': out = nf(0, 0).format(v * 100) + '%'; break;
+      case 'pct1': out = nf(1, 1).format(v * 100) + '%'; break;
+      case 'pct2': out = nf(2, 2).format(v * 100) + '%'; break;
+      case 'krw': out = '₩' + nf(0, 0).format(v); break;
+      case 'usd': out = '$' + nf(0, 2).format(v); break;
+      case 'k': out = nf(0, 1).format(v / 1e3) + 'K'; break;
+      case 'm': out = nf(0, 2).format(v / 1e6) + 'M'; break;
+      case 'man': out = nf(0, 1).format(v / 1e4) + '만'; break;
+      case 'eok': out = nf(0, 2).format(v / 1e8) + '억'; break;
+      case 'jo': out = nf(0, 2).format(v / 1e12) + '조'; break;
+      case 'compact': out = BI.compact(v); break;
       default: {
         const a = Math.abs(v);
-        if (Number.isInteger(v)) return nf(0, 0).format(v);
-        if (a >= 100) return nf(0, 1).format(v);
-        if (a >= 1) return nf(0, 2).format(v);
-        return nf(0, 4).format(v);
+        if (Number.isInteger(v)) out = nf(0, 0).format(v);
+        else if (a >= 100) out = nf(0, 1).format(v);
+        else if (a >= 1) out = nf(0, 2).format(v);
+        else out = nf(0, 4).format(v);
       }
     }
+    return noNegZero(out);
   };
 
   BI.compact = function (v) {
@@ -79,8 +105,11 @@
 
   BI.axisFormatter = (fmt) => (v) => {
     if (v === 0) return '0';
-    if (fmt === 'pct') return BI.formatNumber(v, 'pct');
-    if (fmt === 'auto' || !fmt || fmt === 'int' || fmt === 'dec1' || fmt === 'dec2') return BI.compact(v);
+    const base = String(fmt || '').split('@')[0];
+    // 축 눈금은 간격이 촘촘할 수 있어 % 자릿수를 넉넉히 (0.1%, 0.1% 중복 방지)
+    if (/^pct/.test(base)) { const r = Math.round(v * 1e6) / 1e4; return noNegZero(nf(0, Math.abs(r) >= 10 ? 0 : 2).format(r) + '%'); }
+    if (base === 'auto' || !base || base === 'int' || base === 'dec1' || base === 'dec2') return BI.compact(v);
+    if (base === 'acct') return v < 0 ? '(' + BI.compact(-v) + ')' : BI.compact(v);
     return BI.formatNumber(v, fmt);
   };
 
@@ -109,7 +138,8 @@
     if (b == null) return -1;
     if (typeof a === 'number' && typeof b === 'number') return a - b;
     if (typeof a === 'boolean' && typeof b === 'boolean') return a ? 1 : -1;
-    return collator.compare(String(a), String(b));
+    // 앞뒤 공백은 무시하고 비교 ("  제품매출"이 맨 앞으로 오지 않도록)
+    return collator.compare(String(a).trim(), String(b).trim());
   };
 
   /* ---------- 아이콘 (SVG, 1.6px 선) ---------- */
@@ -156,8 +186,16 @@
     const A = hex2rgb(a), B = hex2rgb(b);
     return rgb2hex([0, 1, 2].map((i) => A[i] + (B[i] - A[i]) * t));
   };
+  /* 등락 색상: 기본(상승=초록/하락=빨강, 발산 음수=빨강) / 한국식(상승=빨강/하락=파랑) — 통합 문서 설정 */
+  BI.koreanColors = () => !!(BI.App && BI.App.state && BI.App.state.settings && BI.App.state.settings.koreanColors);
+  BI.upColor = () => (BI.koreanColors() ? '#d1343e' : '#1baf7a');
+  BI.downColor = () => (BI.koreanColors() ? '#3563e9' : '#e34948');
+  BI.seqStops = (seq) => {
+    if (seq === 'diverge') return BI.koreanColors() ? ['#3563e9', '#f2f3f5', '#d1343e'] : BI.SEQ.diverge;
+    return BI.SEQ[seq] || BI.SEQ.blue;
+  };
   BI.colorScale = function (min, max, seq) {
-    const stops = BI.SEQ[seq] || BI.SEQ.blue;
+    const stops = BI.seqStops(seq);
     const span = max - min || 1;
     return function (v) {
       if (v == null || isNaN(v)) return '#ccc';
@@ -215,8 +253,12 @@
     }
     const t = BI.h('<div class="toast ' + (kind || '') + '">' + BI.esc(msg) + '</div>');
     box.appendChild(t);
-    setTimeout(() => t.classList.add('hide'), 2600);
-    setTimeout(() => t.remove(), 3000);
+    // 경고·오류는 읽을 시간이 더 필요하므로 오래 표시 (클릭하면 닫힘)
+    const ms = kind === 'err' || kind === 'warn' ? Math.min(12000, 5000 + String(msg).length * 40) : 2600;
+    t.style.pointerEvents = 'auto';
+    t.onclick = () => t.remove();
+    setTimeout(() => t.classList.add('hide'), ms);
+    setTimeout(() => t.remove(), ms + 400);
   };
 
   /* 모달 */

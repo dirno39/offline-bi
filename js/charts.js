@@ -154,7 +154,9 @@
     if (!meas.length) meas.push({ f: '__count', agg: 'SUM' });
     if (!sp.meas.length) sp.meas = meas;
     const res = Q.aggregate(ctx.ds, ctx.rows, sp.dims, meas);
-    Q.sortResult(res, ctx.ds);
+    Q.sortResult(res, ctx.ds, ctx.rows);
+    // 테이블 계산은 차트 종류와 관계없이 선반 기준 같은 방향으로 계산
+    Q.applyTableCalcs(res, { col: sp.D.col, row: sp.D.row }, ctx.ds);
     ctx.res = res;
     return res;
   }
@@ -232,8 +234,31 @@
     sp.D.detail.concat(sp.D.label >= 0 ? [sp.D.label] : []).concat(sp.D.tooltip).forEach((j) => catD.push(j));
     if (type === 'pareto' || type === 'waterfall') catD = catD.slice();
 
-    Q.applyTableCalcs(res, catD);
-    const cats = Q.combos(res, catD, ctx.ds);
+    let cats = Q.combos(res, catD, ctx.ds);
+    // 날짜 축: Null 날짜는 축 범주로 그리지 않고, 연속 날짜는 빈 기간을 채워 간격이 왜곡되지 않게
+    const dateJ = catD.filter((j) => Q.isTimeline(sp.dims[j], ctx.ds));
+    if (dateJ.length) {
+      const pos = dateJ.map((j) => catD.indexOf(j));
+      const nullCats = cats.filter((c) => pos.some((k) => c.keys[k] == null));
+      if (nullCats.length) {
+        const fid = sp.dims[dateJ[0]].f;
+        ctx.nullExcluded = ctx.rows.reduce((a, r) => a + (r[fid] == null ? 1 : 0), 0);
+        cats = cats.filter((c) => !nullCats.includes(c));
+      }
+      const dp = catD.length === 1 && sp.dims[catD[0]].dp;
+      if (dp && ['year', 'quarter', 'month', 'week', 'day'].includes(dp) && cats.length > 1 && !sp.dims[catD[0]].sort) {
+        const have = new Map(cats.map((c) => [c.keys[0], c]));
+        const ks = cats.map((c) => c.keys[0]).sort((a, b) => a - b);
+        const full = [];
+        for (let k = ks[0]; k != null && k <= ks[ks.length - 1] && full.length <= 20000; k = Q.nextDateKey(dp, k)) {
+          full.push(k);
+        }
+        if (full.length <= 20000 && full.length > cats.length) {
+          cats = full.map((k) => have.get(k) || { key: 'number:' + k, keys: [k], o: [0], label: Q.keyLabel(sp.dims[catD[0]], ctx.ds, k), filled: true });
+          ctx.filledPeriods = full.length - have.size;
+        }
+      }
+    }
     const catIdx = new Map(cats.map((c, i) => [c.key, i]));
     const colors = colorD >= 0 ? Q.combos(res, [colorD], ctx.ds) : [null];
     const isLineish = type === 'line' || type === 'area' || type === 'stackarea' || type === 'dualline';
@@ -270,7 +295,7 @@
         if (type === 'combo' && vi > 0) { stype = 'line'; yAxisIndex = 1; }
         if (type === 'dualline' && vi > 0) yAxisIndex = 1;
         const s = {
-          name, type: stype, data,
+          name, type: stype, data, _vi: vi,
           emphasis: { focus: 'series' },
           barMaxWidth: 60,
         };
@@ -341,13 +366,58 @@
     opt.xAxis = horizontal ? axes : catAxis;
     opt.yAxis = horizontal ? catAxis : axes;
     opt.series = series;
-    if (cats.length > 40 && !horizontal && type !== 'pareto') opt.dataZoom = [{ type: 'inside', xAxisIndex: 0, start: 0, end: Math.min(100, Math.round((40 / cats.length) * 100)) }, { type: 'slider', height: 14, bottom: 4 }];
+    // 확대 구간 기본값: 전체 기간 (예전처럼 앞쪽 40개만 보이지 않게)
+    if (cats.length > 40 && !horizontal && type !== 'pareto') opt.dataZoom = [{ type: 'inside', xAxisIndex: 0, start: 0, end: 100 }, { type: 'slider', height: 14, bottom: 4, start: 0, end: 100 }];
     if (cats.length > 40 && !horizontal) opt.grid.bottom = 28;
     if (cats.length > 30 && horizontal) opt.dataZoom = [{ type: 'inside', yAxisIndex: 0, start: 0, end: Math.min(100, Math.round((30 / cats.length) * 100)) }, { type: 'slider', yAxisIndex: 0, width: 12, right: 2 }];
     if (cscale) opt.visualMap = undefined;
-    // 참조선 (평균)
+    // 같은 선반에 측정값이 여럿이면 측정값마다 패널(축)을 나눔 (Tableau의 측정값별 축처럼) — 서식에서 끌 수 있음
+    const split = valM.length > 1 && !['combo', 'dualline', 'pct100'].includes(type) && ctx.o.measurePanels !== false;
+    if (split) {
+      const n = valM.length;
+      const legendH = showLegend && ctx.o.legend ? 8 : 3;
+      const zoomH = opt.dataZoom && !horizontal ? 7 : 2;
+      const grids = [], cA = [], vA = [];
+      valM.forEach((mi, i) => {
+        if (horizontal) {
+          const w = (100 - 4) / n;
+          grids.push({ left: (2 + i * w) + '%', width: (w - 2) + '%', top: legendH + '%', bottom: 28, containLabel: true });
+        } else {
+          const h = (100 - legendH - zoomH - 4) / n;
+          grids.push({ left: 34, right: 24, top: (legendH + i * h) + '%', height: (h - 3) + '%', containLabel: true });
+        }
+        const ca = Object.assign({}, catAxis, { gridIndex: i, axisLabel: Object.assign({}, catAxis.axisLabel) });
+        if (horizontal ? i > 0 : i < n - 1) ca.axisLabel.show = false;
+        cA.push(ca);
+        const va = valAxis(ctx.ml(mi), ctx.fmt(mi));
+        va.gridIndex = i;
+        if (!horizontal) { va.nameGap = 46; va.nameTextStyle = Object.assign({}, va.nameTextStyle, { width: 120, overflow: 'truncate' }); }
+        vA.push(va);
+      });
+      opt.grid = grids;
+      opt.xAxis = horizontal ? vA : cA;
+      opt.yAxis = horizontal ? cA : vA;
+      series.forEach((s) => { s.xAxisIndex = s._vi; s.yAxisIndex = s._vi; });
+      if (opt.dataZoom) opt.dataZoom.forEach((z) => { if (horizontal) z.yAxisIndex = cA.map((_, i) => i); else z.xAxisIndex = cA.map((_, i) => i); });
+      ctx.measurePanels = n;
+    }
+    series.forEach((s) => delete s._vi);
+    // 참조선: 평균 / 중앙값 / 상수(목표) — 값 표시. 측정값별 패널이면 패널마다
     if (ctx.o.refLine && series.length) {
-      series[0].markLine = { symbol: 'none', silent: true, lineStyle: { type: 'dashed', color: '#d1343e' }, label: { formatter: (p) => '평균 ' + ctx.fv(valM[0], p.value), fontSize: 10 }, data: [{ type: 'average' }] };
+      const kind = ctx.o.refKind || 'avg';
+      const cv = +ctx.o.refConst;
+      const KN = { avg: '평균', median: '중앙값', const: String(ctx.o.refName || '').trim() || '목표' };
+      if (!(kind === 'const' && !isFinite(cv))) {
+        const seen = new Set();
+        series.forEach((s, si) => {
+          const vi = split ? s.xAxisIndex : 0;
+          if (seen.has(vi) || (!split && si > 0)) return;
+          seen.add(vi);
+          const mi = valM[vi] != null ? valM[vi] : valM[0];
+          const d = kind === 'const' ? (horizontal ? { xAxis: cv } : { yAxis: cv }) : { type: kind === 'median' ? 'median' : 'average' };
+          s.markLine = { symbol: 'none', silent: true, lineStyle: { type: 'dashed', color: '#d1343e' }, label: { position: 'insideEndTop', formatter: (p) => KN[kind] + ' ' + ctx.fv(mi, p.value), fontSize: 10 }, data: [d] };
+        });
+      }
     }
     return { option: opt };
   }
@@ -406,7 +476,8 @@
       neg.push(v < 0 ? -v : '-');
     });
     base.push(0); pos.push(run >= 0 ? run : '-'); neg.push(run < 0 ? -run : '-');
-    const labels = cats.map((c) => c.label).concat(['합계']);
+    const labels = cats.map((c) => c.label).concat([String(ctx.o.wfTotalName || '').trim() || '합계']);
+    const totalColor = BI.koreanColors() ? '#4e5968' : '#3563e9';
     const opt = baseOption(ctx);
     opt.tooltip.trigger = 'axis';
     opt.tooltip.formatter = (ps) => {
@@ -420,8 +491,8 @@
     const lbl = (p) => (p.value === '-' ? '' : ctx.fv(mi, p.value));
     opt.series = [
       { type: 'bar', stack: 'w', silent: true, itemStyle: { color: 'transparent' }, data: base },
-      { name: '증가', type: 'bar', stack: 'w', barMaxWidth: 60, data: pos.map((v, i) => ({ value: v, itemStyle: { color: i === labels.length - 1 ? '#3563e9' : '#1baf7a' } })), label: { show: ctx.o.labels, position: 'top', fontSize: 10, formatter: lbl } },
-      { name: '감소', type: 'bar', stack: 'w', barMaxWidth: 60, data: neg.map((v, i) => ({ value: v, itemStyle: { color: i === labels.length - 1 ? '#3563e9' : '#e34948' } })), label: { show: ctx.o.labels, position: 'bottom', fontSize: 10, formatter: (p) => (p.value === '-' ? '' : '-' + ctx.fv(mi, p.value)) } },
+      { name: '증가', type: 'bar', stack: 'w', barMaxWidth: 60, data: pos.map((v, i) => ({ value: v, itemStyle: { color: i === labels.length - 1 ? totalColor : BI.upColor() } })), label: { show: ctx.o.labels, position: 'top', fontSize: 10, formatter: lbl } },
+      { name: '감소', type: 'bar', stack: 'w', barMaxWidth: 60, data: neg.map((v, i) => ({ value: v, itemStyle: { color: i === labels.length - 1 ? totalColor : BI.downColor() } })), label: { show: ctx.o.labels, position: 'bottom', fontSize: 10, formatter: (p) => (p.value === '-' ? '' : '-' + ctx.fv(mi, p.value)) } },
     ];
     return { option: opt };
   }
@@ -628,12 +699,12 @@
     const data = Array.from(cell.values());
     data.forEach((d) => { const v = d.value[2]; if (typeof v === 'number') { mn = Math.min(mn, v); mx = Math.max(mx, v); } });
     const opt = baseOption(ctx);
-    const stops = BI.SEQ[ctx.o.seq] || BI.SEQ.blue;
+    const stops = BI.seqStops(ctx.o.seq);
     opt.grid = { left: 20, right: 20, top: 10, bottom: 50, containLabel: true };
     opt.xAxis = { type: 'category', data: xs.map((c) => c.label), splitArea: { show: true }, axisLabel: { fontSize: 11, rotate: xs.length > 10 ? 35 : 0, hideOverlap: true } };
     opt.yAxis = { type: 'category', data: ys.map((c) => c.label), inverse: true, splitArea: { show: true }, axisLabel: { fontSize: 11 } };
     opt.visualMap = { min: isFinite(mn) ? mn : 0, max: isFinite(mx) ? mx : 1, calculable: true, orient: 'horizontal', left: 'center', bottom: 0, itemHeight: 140, itemWidth: 12, inRange: { color: stops }, textStyle: { fontSize: 10 }, formatter: (v) => BI.axisFormatter(ctx.fmt(vm))(v) };
-    opt.series = [{ type: 'heatmap', data, label: { show: ctx.o.labels || xs.length * ys.length <= 120, fontSize: 10, formatter: (p) => BI.compact(p.value[2]) }, itemStyle: { borderColor: '#fff', borderWidth: 1 }, emphasis: { itemStyle: { borderColor: '#333', borderWidth: 1 } } }];
+    opt.series = [{ type: 'heatmap', data, label: { show: ctx.o.labels || xs.length * ys.length <= 120, fontSize: 10, formatter: (p) => ctx.fv(vm, p.value[2]) }, itemStyle: { borderColor: '#fff', borderWidth: 1 }, emphasis: { itemStyle: { borderColor: '#333', borderWidth: 1 } } }];
     return { option: opt };
   }
 
@@ -649,11 +720,16 @@
     let mn = Infinity, mx = -Infinity;
     vals.forEach((v) => { if (v < mn) mn = v; if (v > mx) mx = v; });
     let nb = +ctx.o.bins || Math.min(50, Math.max(5, Math.ceil(Math.log2(vals.length) + 1)));
-    const w = (mx - mn) / nb || 1;
+    let w = (mx - mn) / nb || 1;
+    // 구간 크기 지정: 경계를 구간 크기의 배수로 맞춤 (예: 1,000만 단위)
+    const bs = +ctx.o.binSize;
+    if (bs > 0 && (mx - mn) / bs <= 1000) { w = bs; mn = Math.floor(mn / bs) * bs; nb = Math.max(1, Math.floor((mx - mn) / bs) + 1); }
     const cnt = new Array(nb).fill(0);
     vals.forEach((v) => { cnt[Math.min(nb - 1, Math.floor((v - mn) / w))]++; });
     const f = BI.Data.fieldById(ctx.ds, id);
-    const labels = cnt.map((_, i) => BI.compact(mn + i * w) + ' ~ ' + BI.compact(mn + (i + 1) * w));
+    const hf = Q.measureFormat(Object.assign({}, mp, { agg: 'SUM', tc: null }), ctx.ds, ctx.o.numFmt);
+    const hfmt = (v) => (hf === 'auto' ? BI.compact(v) : BI.formatNumber(v, hf));
+    const labels = cnt.map((_, i) => hfmt(mn + i * w) + ' ~ ' + hfmt(mn + (i + 1) * w));
     const opt = baseOption(ctx);
     opt.tooltip.formatter = (p) => '<div class="tip"><b>' + BI.esc((f ? f.name : '') + ' ' + labels[p.dataIndex]) + '</b><div><span class="tk">빈도</span><b>' + BI.formatNumber(p.value) + '</b></div><div><span class="tk">비율</span><b>' + BI.formatNumber(p.value / vals.length, 'pct') + '</b></div></div>';
     opt.grid = { left: 20, right: 20, top: 20, bottom: 30, containLabel: true };
@@ -668,7 +744,9 @@
     const sp = ctx.sp;
     const mp = sp.rowMeas[0] || sp.colMeas[0] || sp.meas[0];
     if (!mp) return { empty: '상자 수염 그림에는 측정값 1개가 필요합니다.' };
-    const catDims = sp.colDims.concat(sp.rowDims, sp.color && !sp.color.agg ? [sp.color] : []);
+    // 색상 차원은 X축 범주가 아니라 상자 색(시리즈)으로 구분
+    const colorDim = sp.color && !sp.color.agg ? sp.color : null;
+    const catDims = sp.colDims.concat(sp.rowDims, colorDim ? [colorDim] : []);
     const detail = sp.detail.filter((p) => !p.agg);
     const kfs = catDims.map((p) => Q.keyFn(p, ctx.ds));
     const groups = new Map();
@@ -692,33 +770,49 @@
       });
     }
     const arr = Array.from(groups.values()).sort((a, b) => { for (let i = 0; i < a.keys.length; i++) { const c = BI.cmp(a.keys[i], b.keys[i]); if (c) return c; } return 0; });
-    const labels = arr.map((g) => g.keys.map((k, i) => Q.keyLabel(catDims[i], ctx.ds, k)).join(' · ') || (BI.Data.fieldById(ctx.ds, mp.f) || {}).name);
-    const boxes = [], outl = [];
-    arr.forEach((g, gi) => {
-      const s = g.v.sort((a, b) => a - b);
-      if (!s.length) { boxes.push([]); return; }
+    const nx = colorDim ? catDims.length - 1 : catDims.length;
+    const xLabel = (g) => g.keys.slice(0, nx).map((k, i) => Q.keyLabel(catDims[i], ctx.ds, k)).join(' · ') || (BI.Data.fieldById(ctx.ds, mp.f) || {}).name;
+    const labels = Array.from(new Set(arr.map(xLabel)));
+    const colorKeys = colorDim ? Array.from(new Set(arr.map((g) => g.keys[nx]))).sort(BI.cmp) : [null];
+    const stat = (vals) => {
+      const s = vals.slice().sort((a, b) => a - b);
+      if (!s.length) return { box: [], out: [] };
       const q1 = BI.quantile(s, 0.25), q2 = BI.quantile(s, 0.5), q3 = BI.quantile(s, 0.75), iqr = q3 - q1;
       const lo = q1 - 1.5 * iqr, hi = q3 + 1.5 * iqr;
       const inner = s.filter((v) => v >= lo && v <= hi);
-      boxes.push([inner[0], q1, q2, q3, inner[inner.length - 1]]);
-      s.forEach((v) => { if (v < lo || v > hi) outl.push([gi, v]); });
-    });
+      return { box: [inner[0], q1, q2, q3, inner[inner.length - 1]], out: s.filter((v) => v < lo || v > hi), n: s.length };
+    };
     const fmt = Q.measureFormat(Object.assign({}, mp, { agg: 'SUM' }), ctx.ds, ctx.o.numFmt);
+    const series = [], counts = {};
+    colorKeys.forEach((ck, ci) => {
+      const boxes = labels.map(() => []), outl = [];
+      arr.forEach((g) => {
+        if (colorDim && BI.cmp(g.keys[nx], ck) !== 0) return;
+        const xi = labels.indexOf(xLabel(g));
+        const st = stat(g.v);
+        boxes[xi] = st.box;
+        counts[ci + ':' + xi] = st.n || 0;
+        st.out.forEach((v) => outl.push([xi, v]));
+      });
+      const col = ctx.palette[ci % ctx.palette.length];
+      const nm = colorDim ? Q.keyLabel(colorDim, ctx.ds, ck) : '';
+      series.push({ name: nm, type: 'boxplot', data: boxes, _ci: ci, itemStyle: { color: colorDim ? BI.mix(col, '#ffffff', 0.7) : '#dbe7f3', borderColor: col } });
+      series.push({ name: nm, type: 'scatter', data: outl, symbolSize: 5, itemStyle: { color: colorDim ? col : ctx.palette[2], opacity: 0.6 } });
+    });
     const opt = baseOption(ctx);
     opt.tooltip.formatter = (p) => {
       if (p.seriesType === 'boxplot') {
         const d = p.data.slice(-5);
-        return '<div class="tip"><b>' + BI.esc(p.name) + '</b>' + ['최소(수염)', '1사분위', '중앙값', '3사분위', '최대(수염)'].map((n, i) => '<div><span class="tk">' + n + '</span><b>' + BI.formatNumber(d[i], fmt) + '</b></div>').join('') + '<div><span class="tk">개수</span><b>' + arr[p.dataIndex].v.length + '</b></div></div>';
+        return '<div class="tip"><b>' + BI.esc(p.name) + (p.seriesName ? ' · ' + BI.esc(p.seriesName) : '') + '</b>' + ['최소(수염)', '1사분위', '중앙값', '3사분위', '최대(수염)'].map((n, i) => '<div><span class="tk">' + n + '</span><b>' + BI.formatNumber(d[i], fmt) + '</b></div>').join('') + '<div><span class="tk">개수</span><b>' + (counts[(series[p.seriesIndex]._ci || 0) + ':' + p.dataIndex] || 0) + '</b></div></div>';
       }
       return '<div class="tip">이상치: <b>' + BI.formatNumber(p.data[1], fmt) + '</b></div>';
     };
-    opt.grid = { left: 20, right: 20, top: 20, bottom: 20, containLabel: true };
+    opt.legend = legendOpt(ctx, !!colorDim);
+    if (colorDim) opt.legend.data = series.filter((s) => s.type === 'boxplot').map((s) => s.name);
+    opt.grid = { left: 20, right: 20, top: colorDim && ctx.o.legend ? 36 : 20, bottom: 20, containLabel: true };
     opt.xAxis = { type: 'category', data: labels, axisLabel: { fontSize: 11, rotate: labels.length > 10 ? 30 : 0, hideOverlap: true } };
     opt.yAxis = { type: 'value', scale: true, name: (BI.Data.fieldById(ctx.ds, mp.f) || {}).name, axisLabel: { formatter: BI.axisFormatter(fmt), fontSize: 11 }, splitLine: { lineStyle: { color: '#eef1f4' } } };
-    opt.series = [
-      { type: 'boxplot', data: boxes, itemStyle: { color: '#dbe7f3', borderColor: ctx.palette[0] } },
-      { type: 'scatter', data: outl, symbolSize: 5, itemStyle: { color: ctx.palette[2], opacity: 0.6 } },
-    ];
+    opt.series = series;
     return { option: opt };
   }
 
@@ -861,7 +955,7 @@
     const opt = baseOption(ctx);
     const fmt = Q.measureFormat(mp, ctx.ds, ctx.o.numFmt);
     opt.tooltip.formatter = (p) => '<div class="tip"><b>' + p.value[0] + '</b><div><span class="tk">' + BI.esc(Q.pillLabel(mp, ctx.ds)) + '</span><b>' + Q.fmtMeasure(p.value[1], fmt) + '</b></div></div>';
-    opt.visualMap = { min: mn, max: mx, calculable: true, orient: 'horizontal', left: 'center', bottom: 0, itemHeight: 140, itemWidth: 12, inRange: { color: BI.SEQ[ctx.o.seq] || BI.SEQ.green }, textStyle: { fontSize: 10 }, formatter: (v) => BI.compact(v) };
+    opt.visualMap = { min: mn, max: mx, calculable: true, orient: 'horizontal', left: 'center', bottom: 0, itemHeight: 140, itemWidth: 12, inRange: { color: BI.seqStops(ctx.o.seq || 'green') }, textStyle: { fontSize: 10 }, formatter: (v) => BI.axisFormatter(fmt)(v) };
     opt.calendar = years.map((y, i) => ({ range: String(y), top: 30 + i * 150, left: 50, right: 20, cellSize: ['auto', 15], yearLabel: { fontSize: 13 }, dayLabel: { nameMap: ['일', '월', '화', '수', '목', '금', '토'], fontSize: 10 }, monthLabel: { nameMap: ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'], fontSize: 10 }, itemStyle: { borderColor: '#fff', borderWidth: 2 }, splitLine: { lineStyle: { color: '#999', width: 1 } } }));
     opt.series = years.map((y, i) => ({ type: 'heatmap', coordinateSystem: 'calendar', calendarIndex: i, data: data.filter((d) => d[0].startsWith(String(y))) }));
     return { option: opt, minHeight: 60 + years.length * 150 };
@@ -888,7 +982,6 @@
     const addM = (i) => { if (i >= 0 && !mOrder.includes(i)) mOrder.push(i); };
     sp.M.col.forEach(addM); sp.M.row.forEach(addM); addM(sp.M.label); addM(sp.M.color); addM(sp.M.size); sp.M.tooltip.forEach(addM);
     if (!mOrder.length) mOrder.push(0);
-    Q.applyTableCalcs(res, rowD);
     const rCombos = Q.combos(res, rowD, ctx.ds);
     const cCombos = Q.combos(res, colD, ctx.ds);
     const cell = new Map();
@@ -1008,7 +1101,7 @@
         if (ctx.o.kpiLatest !== false) val = last.m[i];
         if (prev && typeof prev.m[i] === 'number' && prev.m[i] !== 0 && typeof last.m[i] === 'number') {
           const ch = (last.m[i] - prev.m[i]) / Math.abs(prev.m[i]);
-          delta = '<div class="kpi-delta ' + (ch >= 0 ? 'up' : 'down') + '">' + (ch >= 0 ? '▲ ' : '▼ ') + BI.formatNumber(Math.abs(ch), 'pct') + ' <span>직전 ' + BI.esc(Q.keyLabel(dd, ctx.ds, prev.d[0])) + ' 대비</span></div>';
+          delta = '<div class="kpi-delta ' + (ch >= 0 ? 'up' : 'down') + '" style="color:' + (ch >= 0 ? BI.upColor() : BI.downColor()) + '">' + (ch >= 0 ? '▲ ' : '▼ ') + BI.formatNumber(Math.abs(ch), 'pct') + ' <span>직전 ' + BI.esc(Q.keyLabel(dd, ctx.ds, prev.d[0])) + ' 대비</span></div>';
         }
         if (vals.length > 1) {
           const mn = Math.min(...vals), mx = Math.max(...vals), W = 200, H = 40;
@@ -1067,7 +1160,8 @@
   function labelTweak(opt, ctx) {
     const pos = ctx.o.labelPos || 'auto';
     const dx = +ctx.o.labelDx || 0, dy = +ctx.o.labelDy || 0;
-    const horizontal = opt.yAxis && !Array.isArray(opt.yAxis) && opt.yAxis.type === 'category';
+    const y0 = [].concat(opt.yAxis || [])[0];
+    const horizontal = !!(y0 && y0.type === 'category');
     [].concat(opt.series || []).forEach((s) => {
       if (!s || s.name === '__center' || !s.label || s.label.show === false) return;
       if (pos !== 'auto') {

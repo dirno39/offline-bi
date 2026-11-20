@@ -72,6 +72,9 @@
             if (fmt && typeof fmt === 'string' && XLSX.SSF.is_date(fmt)) {
               const pd = XLSX.SSF.parse_date_code(cell.v);
               v = pd ? new Date(pd.y, pd.m - 1, pd.d, pd.H, pd.M, Math.round(pd.S)) : cell.v;
+            } else if (fmt && typeof fmt === 'string' && /^0{2,}$/.test(fmt) && Number.isInteger(cell.v) && cell.v >= 0) {
+              // 000000 같은 0 채움 서식의 코드값 → 앞자리 0을 살린 문자열 (5930 → "005930")
+              v = String(cell.v).padStart(fmt.length, '0');
             } else v = cell.v;
           } else if (cell.t === 'd') v = cell.v instanceof Date ? cell.v : new Date(cell.v);
           else if (cell.t === 'b') v = cell.v ? 'TRUE' : 'FALSE';
@@ -84,9 +87,12 @@
       out.push(any ? row : null);
     }
     // 병합 셀(머리글) 처리: 병합 범위 값 채우기
+    // 단, 한 줄짜리 병합이 표 전체 폭을 덮으면 제목 행이므로 채우지 않음 (제목 행 감지가 되도록)
+    const fullW = range.e.c - range.s.c + 1;
     (ws['!merges'] || []).forEach((m) => {
       const base = out[m.s.r - range.s.r];
       if (!base) return;
+      if (m.s.r === m.e.r && m.e.c - m.s.c + 1 >= Math.max(3, fullW - 1)) return;
       const v = base[m.s.c - range.s.c];
       for (let r = m.s.r; r <= m.e.r; r++) {
         const row = out[r - range.s.r];
@@ -98,20 +104,29 @@
   };
 
   /* ---------- CSV 파서 ---------- */
+  /* 구분자 감지: 줄마다 구분자 개수가 일정한지(일관성)로 판단.
+     숫자 안의 천 단위 쉼표(1,234)처럼 줄마다 개수가 들쭉날쭉한 문자는 구분자로 보지 않음 */
   D.detectDelimiter = function (text) {
-    const line = text.slice(0, 5000).split(/\r?\n/).slice(0, 5).join('\n');
-    const cands = [',', '\t', ';', '|'];
-    let best = ',', bestN = 0;
-    cands.forEach((d) => {
-      let n = 0, q = false;
-      for (const ch of line) {
-        if (ch === '"') q = !q;
-        else if (!q && ch === d) n++;
-      }
-      if (n > bestN) { best = d; bestN = n; }
+    const lines = text.slice(0, 20000).replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim()).slice(0, 30);
+    if (!lines.length) return ',';
+    const countIn = (l, d) => { let n = 0, q = false; for (const ch of l) { if (ch === '"') q = !q; else if (!q && ch === d) n++; } return n; };
+    const score = (counts) => {
+      const freq = new Map();
+      counts.forEach((c) => { if (c > 0) freq.set(c, (freq.get(c) || 0) + 1); });
+      let mode = 0, mf = 0;
+      freq.forEach((f, c) => { if (f > mf || (f === mf && c > mode)) { mode = c; mf = f; } });
+      return { mode, cons: mf / counts.length };
+    };
+    let best = ',', bs = { mode: 0, cons: 0 };
+    [',', '\t', ';', '|'].forEach((d) => {
+      const sc = score(lines.map((l) => countIn(l, d)));
+      if (sc.cons > bs.cons + 1e-9 || (Math.abs(sc.cons - bs.cons) < 1e-9 && sc.mode > bs.mode)) { best = d; bs = sc; }
     });
-    if (bestN === 0 && /\S {2,}\S/.test(line)) return 'ws';
-    return best;
+    // 공백 정렬(2칸 이상 공백): 구분선(-----)은 빼고 판단, 다른 구분자보다 확실히 일관될 때만
+    const wl = lines.filter((l) => !/^[\s\-=_+|]+$/.test(l));
+    const ws = score(wl.map((l) => (/\S {2,}\S/.test(l.trim()) ? l.trim().split(/\t| {2,}/).length - 1 : 0)));
+    if (ws.mode >= 1 && (bs.mode === 0 || ws.cons >= bs.cons + 0.2)) return 'ws';
+    return bs.mode ? best : ',';
   };
 
   D.DELIMS = [['auto', '자동 감지'], [',', '쉼표 (,)'], ['\t', '탭'], [';', '세미콜론 (;)'], ['|', '세로선 (|)'], ['ws', '공백 정렬 (2칸 이상)'], [' ', '공백 1칸']];
@@ -119,7 +134,7 @@
     if (!delim || delim === 'auto') delim = D.detectDelimiter(text);
     if (delim === 'ws') {
       // 공백으로 열을 맞춘 텍스트(고정폭): 탭 또는 2칸 이상 공백을 구분자로
-      return text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim()).map((l) => l.trim().split(/\t|\s{2,}/).map((v) => v.replace(/^"(.*)"$/, '$1')));
+      return text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim() && !/^[\s\-=_+|]+$/.test(l)).map((l) => l.trim().split(/\t|\s{2,}/).map((v) => v.replace(/^"(.*)"$/, '$1')));
     }
     const rows = [];
     let row = [], f = '', i = 0, q = false;
@@ -156,7 +171,11 @@
     let s = String(v).trim();
     if (s === '' || s === '-') return null;
     let neg = false;
-    if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
+    // 잠정·추정치 표기 (1,234 p)) 제거
+    s = s.replace(/\s*(\(?[pe]\)|잠정|추정)$/i, '');
+    // 등락 부호: ▲ 상승(+), ▼·△·▽ 하락/음수(-)  예) ▲800, ▼500, △1,200
+    if (/^[▲△▼▽]/.test(s)) { if (s[0] !== '▲') neg = true; s = s.slice(1).trim(); if (s === '' || s === '-') return s === '' ? NaN : null; }
+    if (/^\(.*\)$/.test(s)) { neg = !neg; s = s.slice(1, -1); }
     if (!NUM_RE.test(s) || !/\d/.test(s)) return NaN;
     if (/^[+-]?0\d+$/.test(s)) return NaN; // 앞자리 0 → 코드값
     const pct = /%$/.test(s);
@@ -178,7 +197,8 @@
       if (allowCompact && v >= 19000101 && v <= 21001231) v = String(v);
       else return NaN;
     }
-    const s = String(v).trim();
+    // 잠정치 표기(p), e))와 점 뒤 공백(2024. 01. 05)을 정리
+    const s = String(v).trim().replace(/\s*(\(?[pe]\)|잠정|추정)$/i, '').replace(/(\d)\s*([./-])\s*(?=\d)/g, '$1$2').replace(/\.\s*$/, '');
     for (const re of DATE_RES) {
       const m = re.exec(s);
       if (m) {
@@ -217,7 +237,9 @@
   };
 
   const DIM_NAME_RE = /(^id$|_id$|\bid\b|코드|code|번호|no\.?$|^no$|우편|zip|연도|year|^년$|년도|^월$|month|전화|phone|사번|학번|key$)/i;
-  const DATE_NAME_RE = /(일자|날짜|date|dt$|_dt|일시|기준일|년월)/i;
+  const DATE_NAME_RE = /(일자|날짜|date|dt$|_dt|일시|기준일|년월|연월|시점|기간)/i;
+  // 2024. 01 / 2024.05 p) 처럼 시점 표기가 분명한 문자열 (숫자 2024.05로 보지 않음)
+  const YM_STR_RE = /^\d{4}\s*[.\-/]\s*\d{1,2}\s*(\(?[pe]\)|잠정|추정)$|^\d{4}\s*[.\-/]\s+\d{1,2}\.?$/i;
 
   D.inferType = function (values, name) {
     let n = 0, num = 0, date = 0, compactDate = 0;
@@ -228,6 +250,7 @@
       if (v == null || v === '') continue;
       n++;
       if (v instanceof Date) { date++; continue; }
+      if (typeof v === 'string' && YM_STR_RE.test(v.trim()) && !isNaN(D.parseDate(v, false))) { date++; continue; }
       const pn = D.parseNumber(v);
       if (pn != null && !isNaN(pn)) {
         num++;
@@ -269,34 +292,47 @@
       used[nm] = 1;
       const col = body.map((r) => (r ? r[c] : null));
       const type = (opts.types && opts.types[nm]) || D.inferType(col, nm);
-      fields.push({ id: 'f' + c + '_' + Math.random().toString(36).slice(2, 6), name: nm, type, role: D.defaultRole(type, nm), _c: c });
+      fields.push({ id: 'f' + c + '_' + Math.random().toString(36).slice(2, 6), name: nm, type, role: D.defaultRole(type, nm), _c: c, _named: !(header[c] == null || header[c] === '') });
     }
-    // 비어 있는 열 제거
-    const keep = fields.filter((f) => body.some((r) => r && r[f._c] != null && r[f._c] !== ''));
+    // 머리글도 값도 없는 열만 제거 (이름이 있는 열은 값이 모두 비어도 유지)
+    const keep = fields.filter((f) => f._named || body.some((r) => r && r[f._c] != null && r[f._c] !== ''));
     const rows = new Array(body.length);
+    const fails = {};
     for (let r = 0; r < body.length; r++) {
       const src = body[r] || [];
       const o = {};
-      for (const f of keep) o[f.id] = D.convert(src[f._c], f.type);
+      for (const f of keep) {
+        const sv = src[f._c];
+        const v = D.convert(sv, f.type);
+        if (v == null && sv != null && sv !== '' && !(typeof sv === 'string' && D.isNullToken(sv))) fails[f.name] = (fails[f.name] || 0) + 1;
+        o[f.id] = v;
+      }
       rows[r] = o;
     }
-    keep.forEach((f) => delete f._c);
+    keep.forEach((f) => { delete f._c; delete f._named; });
     const ds = { id: BI.uid('ds'), name, fields: keep, rows, rawTypes: {} };
+    if (Object.keys(fails).length) ds.convFails = fails;
     return ds;
   };
 
   /* 필드 데이터 유형 변경 (원본 값 보존을 위해 문자열 경유) */
+  /* 통계표의 빈 값 기호 (변환 실패로 세지 않음) */
+  D.isNullToken = (s) => /^\s*(-|—|–|…|\.{2,3}|x|X|\*|N\/A|n\/a|NA|#N\/A)\s*$/.test(s);
   D.changeType = function (ds, field, type) {
     const old = field.type;
-    if (old === type) return;
+    if (old === type) return 0;
+    let fails = 0;
     for (const r of ds.rows) {
       let v = r[field.id];
       if (old === 'date' && v != null) v = BI.fmtDate(v, true);
-      r[field.id] = D.convert(v, type);
+      const nv = D.convert(v, type);
+      if (nv == null && v != null && v !== '') fails++;
+      r[field.id] = nv;
     }
     field.type = type;
     if (type === 'number' && field.role === 'dimension' && !DIM_NAME_RE.test(field.name)) field.role = 'measure';
     if (type !== 'number' && field.role === 'measure') field.role = 'dimension';
+    return fails;
   };
 
   /* 다른 데이터 원본의 행 추가(유니온) - 이름 기준 매칭 */
@@ -332,28 +368,63 @@
     return missing;
   };
 
+  /* 조인 키 정규화: 기본은 문자열 비교, normalize 옵션이면 앞뒤 공백·앞자리 0을 맞춤 (5930 = "005930") */
+  D.joinKey = function (v, normalize) {
+    if (v == null || v === '') return null;
+    let s = String(v);
+    if (normalize) {
+      s = s.trim();
+      if (/^[+-]?\d+(\.0+)?$/.test(s)) s = s.replace(/\.0+$/, '').replace(/^([+-]?)0+(?=\d)/, '$1');
+    }
+    return s;
+  };
+  /* 조인 미리보기: 왼쪽 행 중 오른쪽과 맞는 비율, 유형 불일치 */
+  D.joinStats = function (left, right, lk, rk, opts) {
+    const nz = !!(opts && opts.normalize);
+    const lf = D.fieldById(left, lk), rf = D.fieldById(right, rk);
+    const keys = new Set();
+    right.rows.forEach((r) => { const k = D.joinKey(r[rk], nz); if (k != null) keys.add(k); });
+    let n = 0, hit = 0;
+    const lkeys = new Set(), lhit = new Set();
+    left.rows.forEach((l) => { const k = D.joinKey(l[lk], nz); if (k == null) return; n++; lkeys.add(k); if (keys.has(k)) { hit++; lhit.add(k); } });
+    // 정규화하면 더 맞는지 (숫자 코드 ↔ 문자 코드)
+    let hitNorm = hit;
+    if (!nz) {
+      const nk = new Set(); right.rows.forEach((r) => { const k = D.joinKey(r[rk], true); if (k != null) nk.add(k); });
+      hitNorm = 0; left.rows.forEach((l) => { const k = D.joinKey(l[lk], true); if (k != null && nk.has(k)) hitNorm++; });
+    }
+    return { leftRows: left.rows.length, keyed: n, matched: hit, rate: n ? hit / n : 0, distinct: lkeys.size, distinctMatched: lhit.size, rightKeys: keys.size, typeL: lf && lf.type, typeR: rf && rf.type, typeMismatch: !!(lf && rf && lf.type !== rf.type), hitNorm };
+  };
+
   /* 조인 */
-  D.join = function (left, right, lk, rk, how, name) {
+  D.join = function (left, right, lk, rk, how, name, opts) {
+    const nz = !!(opts && opts.normalize);
     const fields = [];
     const lmap = {}, rmap = {};
     const used = new Set();
+    const lcalc = [], rcalc = [];
     left.fields.forEach((f) => {
       const nf = { id: BI.uid('f'), name: f.name, type: f.type, role: f.role };
+      if (f.defAgg) nf.defAgg = f.defAgg;
       used.add(nf.name);
       lmap[f.id] = nf.id;
-      fields.push(nf);
+      if (f.calc) { nf.calc = f.calc; lcalc.push(nf); } else fields.push(nf);
     });
+    const renamed = [];
     right.fields.forEach((f) => {
       let nm = f.name;
-      if (used.has(nm)) nm = nm + ' (' + right.name + ')';
+      if (used.has(nm)) { nm = nm + ' (' + right.name + ')'; renamed.push([f.name, nm]); }
       const nf = { id: BI.uid('f'), name: nm, type: f.type, role: f.role };
+      if (f.defAgg) nf.defAgg = f.defAgg;
       used.add(nm);
       rmap[f.id] = nf.id;
-      fields.push(nf);
+      if (f.calc) { nf.calc = f.calc; rcalc.push(nf); } else fields.push(nf);
     });
+    // 오른쪽 계산 필드 수식은 이름이 바뀐 오른쪽 필드를 가리키도록 갱신
+    rcalc.forEach((nf) => { renamed.forEach(([a, b]) => { nf.calc = BI.Calc.renameRef(nf.calc, a, b); }); });
     const idx = new Map();
     right.rows.forEach((r) => {
-      const k = r[rk] == null ? null : String(r[rk]);
+      const k = D.joinKey(r[rk], nz);
       if (k == null) return;
       if (!idx.has(k)) idx.set(k, []);
       idx.get(k).push(r);
@@ -369,23 +440,47 @@
       return o;
     };
     left.rows.forEach((l) => {
-      const k = l[lk] == null ? null : String(l[lk]);
+      const k = D.joinKey(l[lk], nz);
       const m = k == null ? null : idx.get(k);
       if (m) m.forEach((r) => { rows.push(mk(l, r)); matchedRight.add(r); });
       else if (how === 'left' || how === 'full') rows.push(mk(l, null));
     });
     if (how === 'full') right.rows.forEach((r) => { if (!matchedRight.has(r)) rows.push(mk(null, r)); });
-    return { id: BI.uid('ds'), name: name || left.name + ' + ' + right.name, fields: fields.filter((f) => !f.calc), rows };
+    // 계산 필드는 수식을 그대로 유지하고 결과 행에서 다시 계산
+    const nd = { id: BI.uid('ds'), name: name || left.name + ' + ' + right.name, fields: fields.concat(lcalc, rcalc), rows };
+    nd.joinInfo = { left: left.id, right: right.id, lk, rk, how, normalize: nz };
+    D.applyCalcs(nd);
+    return nd;
   };
 
   /* 계산 필드 재계산 */
   D.applyCalcs = function (ds) {
     const errors = [];
+    // 집계 계산 여부를 먼저 확정 (다른 집계 계산 필드를 참조하는 경우 순서와 관계없이)
+    for (let pass = 0; pass < 4; pass++) {
+      let changed = false;
+      ds.fields.forEach((f) => {
+        if (!f.calc) return;
+        let agg = false;
+        try { agg = BI.Calc.compile(f.calc, { fields: ds.fields, rows: [] }, f.id).isAgg; } catch (e) { agg = !!f.aggCalc; }
+        if (!!f.aggCalc !== agg) { changed = true; if (agg) f.aggCalc = true; else delete f.aggCalc; }
+      });
+      if (!changed) break;
+    }
     ds.fields.forEach((f) => {
       if (!f.calc) return;
       try {
         const c = BI.Calc.compile(f.calc, ds, f.id);
         f.type = c.type === 'any' ? f.type || 'string' : c.type;
+        if (c.isAgg) {
+          // 집계 계산: 행 값을 만들지 않고 뷰의 차원 수준에서 계산 (항상 측정값)
+          f.aggCalc = true;
+          f.role = 'measure';
+          f.error = null;
+          for (const r of ds.rows) delete r[f.id];
+          return;
+        }
+        delete f.aggCalc;
         for (const r of ds.rows) {
           let v;
           try { v = c.fn(r); } catch (e) { v = null; }

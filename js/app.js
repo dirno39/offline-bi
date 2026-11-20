@@ -12,7 +12,7 @@
   });
 
   /* ---------- 상태 ---------- */
-  App.newState = () => ({ version: 1, name: '새 통합 문서', datasources: [], sheets: [], dashboards: [], globalFilters: [], tabs: [], active: { type: 'datasource', id: null } });
+  App.newState = () => ({ version: 1, settings: {}, name: '새 통합 문서', datasources: [], sheets: [], dashboards: [], globalFilters: [], tabs: [], active: { type: 'datasource', id: null } });
 
   App.ds = (id) => App.state.datasources.find((d) => d.id === id);
   App.sheet = (id) => App.state.sheets.find((s) => s.id === id);
@@ -50,21 +50,67 @@
     return (sheet.filters || []).concat(App.state.globalFilters.filter((f) => f.dsId === sheet.dsId));
   };
 
-  /* ---------- 실행 취소 ---------- */
-  const snap = () => JSON.stringify({ sheets: App.state.sheets, dashboards: App.state.dashboards, globalFilters: App.state.globalFilters, tabs: App.state.tabs, active: App.state.active });
+  /* ---------- 실행 취소 ----------
+     스냅샷 = 레이아웃 JSON + 데이터 원본 메타(이름·필드·정리 단계) JSON + 행/원본 배열 참조.
+     행 배열은 데이터가 바뀔 때마다 새 배열로 교체되므로 복사하지 않고 참조만 보관합니다. */
+  const dsMeta = (ds) => {
+    const o = Object.assign({}, ds);
+    delete o.rows;
+    if (ds.prep) { o.prep = Object.assign({}, ds.prep); delete o.prep.raw; delete o.prep.text; delete o.prep.unions; }
+    return o;
+  };
+  const snap = () => {
+    const st = App.state;
+    const refs = new Map();
+    st.datasources.forEach((ds) => refs.set(ds.id, { ds, rows: ds.rows, raw: ds.prep ? ds.prep.raw : null, text: ds.prep ? ds.prep.text : null, unions: ds.prep ? ds.prep.unions : null }));
+    return {
+      s: JSON.stringify({ sheets: st.sheets, dashboards: st.dashboards, globalFilters: st.globalFilters, tabs: st.tabs, active: st.active, settings: st.settings || {} }),
+      d: st.datasources.map((ds) => JSON.stringify(dsMeta(ds))),
+      refs,
+    };
+  };
+  App.snap = snap;
+  App.pushUndo = function (before) {
+    App.undo.push(before);
+    if (App.undo.length > 80) App.undo.shift();
+    App.redo = [];
+  };
   App.mutate = function (fn, opts) {
     const before = snap();
     const r = fn();
     if (r === false) return;
-    App.undo.push(before);
-    if (App.undo.length > 80) App.undo.shift();
-    App.redo = [];
+    App.pushUndo(before);
     App.refresh(opts);
     App.autosave();
   };
-  const restore = (s) => {
-    const o = JSON.parse(s);
+  /* 데이터 원본(필드·행·정리 단계)을 바꾸는 작업: 실행 취소 대상, 통계 캐시 초기화 */
+  App.mutateData = function (fn, opts) {
+    App.mutate(() => { const r = fn(); App.ui.statKey = null; return r; }, opts);
+  };
+  const restore = (e) => {
+    if (typeof e === 'string') e = { s: e, d: null, refs: new Map() }; // 예전 형식
+    const o = JSON.parse(e.s);
     Object.assign(App.state, o);
+    if (!e.d) return;
+    const cur = new Map(App.state.datasources.map((ds) => [ds.id, ds]));
+    App.state.datasources = e.d.map((js) => {
+      const m = JSON.parse(js);
+      const ref = e.refs.get(m.id);
+      const ds = (ref && ref.ds) || cur.get(m.id);
+      if (!ds) return null;
+      const same = cur.get(m.id) === ds && JSON.stringify(dsMeta(ds)) === js && (!ref || (ds.rows === ref.rows && (!ds.prep || ds.prep.raw === ref.raw)));
+      if (same) return ds;
+      Object.keys(ds).forEach((k) => { if (k !== 'rows') delete ds[k]; });
+      Object.assign(ds, m);
+      if (ref) {
+        ds.rows = ref.rows;
+        if (m.prep) Object.assign(ds.prep, { raw: ref.raw, text: ref.text, unions: ref.unions || [] });
+      }
+      BI.Data.applyCalcs(ds);
+      return ds;
+    }).filter(Boolean);
+    App.ui.statKey = null;
+    if (App.ui.dsPage && !App.ds(App.ui.dsPage)) App.ui.dsPage = null;
   };
   App.doUndo = function () {
     if (!App.undo.length) return;
@@ -102,6 +148,7 @@
           tx.objectStore('kv').put(v, k);
           tx.oncomplete = () => res(true);
           tx.onerror = () => res(false);
+          tx.onabort = () => res(false);
         } catch (e) { res(false); }
       });
     },
@@ -115,13 +162,122 @@
         } catch (e) { res(null); }
       });
     },
+    del(k) {
+      return new Promise((res) => {
+        if (!IDB.db) return res(false);
+        try {
+          const tx = IDB.db.transaction('kv', 'readwrite');
+          tx.objectStore('kv').delete(k);
+          tx.oncomplete = () => res(true);
+          tx.onerror = () => res(false);
+          tx.onabort = () => res(false);
+        } catch (e) { res(false); }
+      });
+    },
+    keys() {
+      return new Promise((res) => {
+        if (!IDB.db) return res([]);
+        try {
+          const rq = IDB.db.transaction('kv').objectStore('kv').getAllKeys();
+          rq.onsuccess = () => res(rq.result || []);
+          rq.onerror = () => res([]);
+        } catch (e) { res([]); }
+      });
+    },
   };
-  App.autosave = BI.debounce(async function () {
-    const st = App.state;
-    const ok = await IDB.put('workbook', { savedAt: Date.now(), state: st });
-    const el = BI.$('#saveState');
-    if (el) el.textContent = ok ? '자동 저장됨 ' + new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '';
-  }, 800);
+  App.IDB = IDB;
+
+  /* 자동 저장 형식 (v2)
+     - 'workbook' : 레이아웃(시트·대시보드·필드 정의·정리 단계). 편집마다 저장되며 작고 빠름
+     - 'ds:<id>'  : 데이터 원본의 행과 정리 원본(raw/text/unions). 데이터가 바뀔 때만 저장
+     예전 형식('workbook' 하나에 행까지 포함)도 그대로 읽습니다. */
+  const savedData = new Map(); // ds.id → 마지막으로 저장한 행/원본 참조
+  const dirtyData = new Set();
+  const failedData = new Map();
+  App.markDataDirty = (ds) => { if (ds) dirtyData.add(ds.id); };
+  const dataRef = (ds) => ({ rows: ds.rows, n: ds.rows ? ds.rows.length : 0, raw: ds.prep ? ds.prep.raw : null, text: ds.prep ? ds.prep.text : null, un: ds.prep ? ds.prep.unions : null, unN: ds.prep && ds.prep.unions ? ds.prep.unions.length : 0 });
+  const isDataDirty = (ds) => {
+    if (dirtyData.has(ds.id)) return true;
+    const r = savedData.get(ds.id), c = dataRef(ds);
+    return !r || r.rows !== c.rows || r.n !== c.n || r.raw !== c.raw || r.text !== c.text || r.un !== c.un || r.unN !== c.unN;
+  };
+  const layoutOf = (st) => Object.assign({}, st, {
+    datasources: st.datasources.map((ds) => {
+      const o = Object.assign({}, ds, { _data: 'ds:' + ds.id });
+      delete o.rows;
+      if (ds.prep) { o.prep = Object.assign({}, ds.prep); delete o.prep.raw; delete o.prep.text; delete o.prep.unions; }
+      return o;
+    }),
+  });
+  let saveTimer = null, saving = null, again = false;
+  const setSaveLabel = (txt) => { const el = BI.$('#saveState'); if (el) el.textContent = txt; App.ui.saveLabel = txt; };
+  async function doSave() {
+    if (saving) { again = true; return saving; }
+    saving = (async () => {
+      const st = App.state;
+      let ok = true;
+      try {
+        // 데이터가 바뀐 원본만 행 저장
+        for (const ds of st.datasources) {
+          if (!isDataDirty(ds)) continue;
+          const ref = dataRef(ds);
+          // 같은 데이터로 이미 실패했으면(용량 부족 등) 데이터가 바뀔 때까지 다시 시도하지 않음 — 편집마다 멈추지 않도록
+          const fr = failedData.get(ds.id);
+          if (fr && !dirtyData.has(ds.id) && fr.rows === ref.rows && fr.raw === ref.raw && fr.n === ref.n && fr.unN === ref.unN) { ok = false; continue; }
+          dirtyData.delete(ds.id);
+          // 원본 텍스트는 구분자를 바꿔 다시 읽을 때만 필요하므로 큰 파일은 저장하지 않음 (raw 표는 저장)
+          const text = ds.prep && ds.prep.text && ds.prep.text.length < 5e6 ? ds.prep.text : null;
+          const put = await IDB.put('ds:' + ds.id, { rows: ds.rows, prep: ds.prep ? { raw: ds.prep.raw, text, unions: ds.prep.unions } : null });
+          if (put) { savedData.set(ds.id, ref); failedData.delete(ds.id); } else { ok = false; failedData.set(ds.id, ref); }
+        }
+        ok = (await IDB.put('workbook', { savedAt: Date.now(), v: 2, state: layoutOf(st) })) && ok;
+        // 지워진 데이터 원본의 행 정리
+        const live = new Set(st.datasources.map((d) => 'ds:' + d.id));
+        if (!App._keysChecked || savedData.size !== live.size) {
+          App._keysChecked = true;
+          (await IDB.keys()).forEach((k) => { if (typeof k === 'string' && k.startsWith('ds:') && !live.has(k)) { IDB.del(k); savedData.delete(k.slice(3)); } });
+        }
+      } catch (e) { console.warn(e); ok = false; }
+      setSaveLabel(ok ? '자동 저장됨 ' + new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : failedData.size ? '데이터 자동 저장 실패 (브라우저 저장 공간 부족) — .obi로 저장하세요' : '자동 저장 실패');
+      if (!ok && failedData.size && !App._warnedSave) { App._warnedSave = true; BI.toast('데이터가 커서 브라우저 자동 저장에 실패했어요. 작업을 잃지 않으려면 파일 → 통합 문서 저장(.obi)을 사용하세요.', 'warn'); }
+      return ok;
+    })();
+    const r = await saving;
+    saving = null;
+    if (again) { again = false; return doSave(); }
+    return r;
+  }
+  App.autosave = function () {
+    clearTimeout(saveTimer);
+    App._pendingSave = true;
+    setSaveLabel('저장 대기 중…');
+    saveTimer = setTimeout(() => { App._pendingSave = false; doSave(); }, 700);
+  };
+  // 창을 닫거나 숨길 때 기다리지 않고 바로 저장
+  App.flushSave = function () {
+    if (!App._pendingSave) return saving || Promise.resolve(true);
+    clearTimeout(saveTimer);
+    App._pendingSave = false;
+    return doSave();
+  };
+  // 저장된 상태 읽기 (v2: 데이터 키를 따로 읽어 붙임)
+  App.readSaved = async function () {
+    const saved = await IDB.get('workbook');
+    if (!saved || !saved.state || !saved.state.datasources) return null;
+    for (const ds of saved.state.datasources) {
+      if (!ds._data) continue;
+      const d = await IDB.get(ds._data);
+      ds.rows = (d && d.rows) || [];
+      if (ds.prep) Object.assign(ds.prep, (d && d.prep) || { raw: [], text: null, unions: [] });
+      delete ds._data;
+    }
+    return saved;
+  };
+  App.markSaved = function () {
+    savedData.clear();
+    dirtyData.clear();
+    App.state.datasources.forEach((ds) => savedData.set(ds.id, dataRef(ds)));
+  };
 
   /* ---------- 통합 문서 파일 저장/열기 ---------- */
   App.saveWorkbookFile = function () {
@@ -181,16 +337,20 @@
     }
     if (!added.length) return;
     App.addDataSources(added);
-    // 여러 줄 머리글이거나 가로로 펼쳐진 통계표면 데이터 정리 화면을 바로 열어 줌
-    const odd = added.find((d) => d.prep && (+d.prep.headerRows > 1 || +d.prep.skip > 0 || BI.Prep.suggest(d.prep)));
+    // 여러 줄 머리글·시점이 가로로 펼쳐진 통계표·머리글 없는 파일일 때만 데이터 정리 화면을 열어 줌
+    // (평범한 표는 열지 않고, 제목 행을 건너뛴 경우는 안내만)
+    const odd = added.find((d) => d.prep && (+d.prep.headerRows > 1 || d.prep.noHeader || BI.Prep.suggest(d.prep)));
     if (odd) {
-      const why = +odd.prep.headerRows > 1 ? '머리글이 ' + odd.prep.headerRows + '줄인 표라 하나로 합쳤어요.' : +odd.prep.skip > 0 ? '표 위쪽 제목 행 ' + odd.prep.skip + '줄을 건너뛰었어요.' : '숫자 열이 가로로 펼쳐진 표예요.';
+      const why = odd.prep.noHeader ? '첫 행도 데이터처럼 보여 머리글 없이 불러왔어요.' : +odd.prep.headerRows > 1 ? '머리글이 ' + odd.prep.headerRows + '줄인 표라 하나로 합쳤어요.' : '시점이 열로 가로로 펼쳐진 통계표예요.';
       setTimeout(() => App.openPrep(odd, { message: why + ' 필요하면 여기서 분석하기 좋은 형태로 바꿔 보세요.' }), 300);
+    } else {
+      const sk = added.find((d) => d.prep && (+d.prep.skip > 0 || +d.prep.footer > 0));
+      if (sk) setTimeout(() => BI.toast((+sk.prep.skip > 0 ? '표 위쪽 제목 행 ' + sk.prep.skip + '줄' : '') + (+sk.prep.skip > 0 && +sk.prep.footer > 0 ? '과 ' : '') + (+sk.prep.footer > 0 ? '아래쪽 주석 행 ' + sk.prep.footer + '줄' : '') + '을 건너뛰었어요. 데이터 원본 화면의 데이터 정리에서 바꿀 수 있어요.'), 400);
     }
   };
   App.addDataSources = function (added) {
-    added.forEach((ds) => App.state.datasources.push(ds));
-    App.mutate(() => {
+    App.mutateData(() => {
+      added.forEach((ds) => App.state.datasources.push(ds));
       if (!App.state.sheets.length) {
         const sh = App.newSheet(added[0].id);
         App.state.sheets.push(sh);
@@ -222,8 +382,8 @@
   };
   App.loadSample = function () {
     const ds = D.sampleDataSource();
-    App.state.datasources.push(ds);
     App.mutate(() => {
+      App.state.datasources.push(ds);
       const mk = (name, fn) => { const s = App.newSheet(ds.id, name); fn(s); App.state.sheets.push(s); App.state.tabs.push({ type: 'sheet', id: s.id }); return s; };
       const P = (f, agg, extra) => Object.assign({ id: BI.uid('p'), f, agg: agg || null }, extra || {});
       const s1 = mk('월별 매출 추이', (s) => { s.shelves.columns = [P('order_date', null, { dp: 'month' })]; s.shelves.rows = [P('sales', 'SUM')]; s.shelves.color = P('category'); s.chartType = 'line'; });
@@ -265,6 +425,16 @@
         : '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8"/><rect x="13" y="3" width="8" height="5"/><rect x="13" y="10" width="8" height="11"/><rect x="3" y="13" width="8" height="8"/></svg>';
       h += '<div class="tab ' + t.type + (a.type === t.type && a.id === t.id ? ' active' : '') + '" draggable="true" data-tab="' + t.type + '" data-id="' + t.id + '">' + icon + ' <span>' + BI.esc(o.name) + '</span></div>';
     });
+    // 탭 구성이 같으면 DOM을 다시 만들지 않고 활성 표시만 바꿈 (더블클릭 이름 바꾸기가 끊기지 않도록)
+    const sig = h.replace(/ active/g, '');
+    if (bar.dataset.sig === sig && bar.children.length) {
+      BI.$$('.tab', bar).forEach((el) => {
+        const on = el.dataset.tab === 'datasource' ? a.type === 'datasource' : a.type === el.dataset.tab && a.id === el.dataset.id;
+        el.classList.toggle('active', on);
+      });
+      return;
+    }
+    bar.dataset.sig = sig;
     h += '<button class="tab-add" data-cmd="newSheet" title="새 워크시트"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M14 4h6M17 1v6"/></svg></button>';
     h += '<button class="tab-add" data-cmd="newDash" title="새 대시보드"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8"/><rect x="3" y="13" width="8" height="8"/><rect x="13" y="13" width="8" height="8"/><path d="M14 7h6M17 4v6"/></svg></button>';
     bar.innerHTML = h;
@@ -395,6 +565,7 @@
           { text: '새 통합 문서', onClick: () => App.cmd('new') },
           { text: '통합 문서 열기… (.obi)', onClick: () => App.cmd('open') },
           { text: '통합 문서 저장 (.obi)', onClick: () => App.cmd('save') },
+          { text: '등락 색상: 한국식 (상승 빨강 · 하락 파랑)', checked: BI.koreanColors(), onClick: () => App.mutate(() => { App.state.settings = Object.assign({}, App.state.settings, { koreanColors: !BI.koreanColors() }); }) },
           { text: '통합 문서 이름 변경', onClick: () => BI.prompt('통합 문서 이름', App.state.name, (v) => { App.state.name = v; App.refresh(); App.autosave(); }) },
           { sep: true },
           { text: '데이터 파일 추가… (CSV, Excel)', onClick: () => App.cmd('addData') },
@@ -489,6 +660,7 @@
 
   /* ---------- 차트 렌더 공통 ---------- */
   const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver((ents) => ents.forEach((e) => { const ec = e.target._ec; if (ec && !ec.isDisposed()) ec.resize(); })) : null;
+  App.MAX_MARKS = 20000;
   App.disposeCharts = function (root) {
     BI.$$('.chart-host', root).forEach((h) => { if (h._ec) { ro && ro.unobserve(h); h._ec.dispose(); h._ec = null; } });
   };
@@ -511,6 +683,27 @@
     out.ms = performance.now() - t0;
     box._out = out;
     box.style.setProperty('--fs', out.fontScale || 1);
+    // 마크가 너무 많으면(고유값 많은 필드를 축에 놓은 경우) 그리기 전에 확인 — 화면이 수 초 멈추는 것을 막음
+    const marks = out.ctx && out.ctx.res && out.ctx.res.rows ? out.ctx.res.rows.length : 0;
+    if (out.option && marks > App.MAX_MARKS && !(sheet.options && sheet.options.allowManyMarks)) {
+      show('e');
+      if (ch._ec) { ro && ro.unobserve(ch); ch._ec.dispose(); ch._ec = null; }
+      eh.innerHTML = '<div class="empty-msg">마크가 <b>' + marks.toLocaleString() + '개</b>라 그리면 화면이 한동안 멈출 수 있어요.<br>필드를 필터로 좁히거나 상위 N 필터를 쓰는 것을 권장해요.<br><br><button class="btn" data-many="top">상위 50개만 보기</button> <button class="btn primary" data-many="all">그래도 모두 그리기</button></div>';
+      eh.onclick = (e) => {
+        const b = e.target.closest('[data-many]');
+        if (!b) return;
+        if (b.dataset.many === 'all') App.mutate(() => { sheet.options.allowManyMarks = true; });
+        else {
+          const dims = (out.ctx.sp.dims || []).filter((p) => !Q.isTimeline(p, ds));
+          const dim = dims[dims.length - 1] || out.ctx.sp.dims[0];
+          const m = out.ctx.sp.meas.find((p) => p.f !== '__count') || { f: '__count', agg: 'SUM' };
+          if (!dim) return;
+          App.mutate(() => { sheet.filters.push({ id: BI.uid('fl'), f: dim.f, dp: dim.dp || null, type: 'top', n: 50, dir: 'top', by: { f: m.f, agg: m.agg === 'AGG' ? 'SUM' : m.agg || 'SUM' }, card: false }); });
+        }
+      };
+      out.tooManyMarks = marks;
+      return out;
+    }
     if (out.option) {
       show('c');
       let ec = ch._ec;
@@ -605,10 +798,13 @@
     }
     if (kind === 'csv') BI.download(name + '.csv', toCsv(aoa), 'text/csv;charset=utf-8');
     else {
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      // 날짜 문자열은 엑셀 날짜로 (2024-01-05 / 2024-01-05 09:30)
+      const DRE = /^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2})(?::(\d{2}))?)?$/;
+      aoa = aoa.map((r, i) => (i === 0 ? r : r.map((v) => { const m = typeof v === 'string' && DRE.exec(v); return m ? new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)) : v; })));
+      const ws = XLSX.utils.aoa_to_sheet(aoa, { cellDates: true, dateNF: 'yyyy-mm-dd' });
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, String(name).slice(0, 30).replace(/[\\/?*[\]:]/g, '_') || 'Sheet1');
-      XLSX.writeFile(wb, name + '.xlsx');
+      XLSX.writeFile(wb, name + '.xlsx', { compression: true });
     }
   };
   App.viewData = function () {
@@ -640,7 +836,7 @@
 
   /* ---------- 도움말 ---------- */
   App.showHelp = function () {
-    const fns = Object.entries(BI.Calc.FUNCTIONS).map(([k, v]) => '<tr><td><code>' + k + '</code></td><td>' + BI.esc(v[4]) + '</td></tr>').join('');
+    const fns = Object.entries(Object.assign({}, BI.Calc.FUNCTIONS, BI.Calc.AGG_HELP)).map(([k, v]) => '<tr><td><code>' + k + '</code></td><td>' + BI.esc(v[4]) + '</td></tr>').join('');
     BI.modal({
       title: '사용 안내', width: 760,
       body: '<div class="help">' +
@@ -655,7 +851,9 @@
         '<li><b>저장</b>: 작업은 브라우저에 자동 저장됩니다. 파일로 공유하려면 <i>파일 → 통합 문서 저장(.obi)</i>을 사용하세요 (데이터 포함).</li>' +
         '</ol><h4>단축키</h4><p><code>Ctrl+Z</code> 실행 취소 · <code>Ctrl+Y</code> 다시 실행 · <code>Ctrl+S</code> 통합 문서 저장 · <code>Ctrl+O</code> 열기</p>' +
         '<h4>계산된 필드 문법</h4><p>필드는 <code>[필드명]</code>, 문자열은 <code>\'텍스트\'</code>. 연산자: <code>+ - * / % ^</code>, 비교 <code>= != &lt; &gt; &lt;= &gt;=</code>, 논리 <code>AND OR NOT</code>, 문자열 연결 <code>&amp;</code>.<br>' +
-        '<code>IF [이익] &gt; 0 THEN \'흑자\' ELSEIF [이익] = 0 THEN \'손익분기\' ELSE \'적자\' END</code><br><code>CASE [권역] WHEN \'수도권\' THEN \'수도권\' ELSE \'지방\' END</code><br><code>[이익] / [매출]</code> &nbsp; <code>DATEDIFF(\'day\', [주문일자], [배송일자])</code></p>' +
+        '<code>IF [이익] &gt; 0 THEN \'흑자\' ELSEIF [이익] = 0 THEN \'손익분기\' ELSE \'적자\' END</code><br><code>CASE [권역] WHEN \'수도권\' THEN \'수도권\' ELSE \'지방\' END</code><br><code>[이익] / [매출]</code> &nbsp; <code>DATEDIFF(\'day\', [주문일자], [배송일자])</code><br>' +
+        '<b>집계 계산</b>: <code>SUM([이익]) / SUM([매출])</code>처럼 집계 함수를 쓰면 행마다가 아니라 시트의 차원 수준(예: 연도별, 지역별)에서 계산돼요. 비율 지표는 이렇게 만들어야 합계·평균이 맞아요. 집계 함수와 집계하지 않은 필드는 섞어 쓸 수 없어요.<br>' +
+        '<b>세부 수준 식</b>: <code>{FIXED [회원ID] : MIN([주문일자])}</code> — 회원마다 첫 주문일을 계산해 모든 행에 붙여요. 필터와 관계없이 전체 데이터 기준이에요.</p>' +
         '<table class="grid fn-table"><thead><tr><th>함수</th><th>설명</th></tr></thead><tbody>' + fns + '</tbody></table></div>',
     });
   };
@@ -664,9 +862,10 @@
   App.init = async function () {
     App.state = App.newState();
     await IDB.open();
-    const saved = await IDB.get('workbook');
+    let saved = null;
+    try { saved = await App.readSaved(); } catch (e) { console.error(e); }
     if (saved && saved.state && saved.state.datasources) {
-      try { App.loadState(saved.state); } catch (e) { console.error(e); App.state = App.newState(); }
+      try { App.loadState(saved.state); if (saved.v === 2) App.markSaved(); } catch (e) { console.error(e); App.state = App.newState(); }
     }
     App.bindGlobal();
     App.refresh();
@@ -707,7 +906,10 @@
         else App.addDataFiles(fs);
       }
     });
-    window.addEventListener('beforeunload', () => { /* 자동 저장됨 */ });
+    // 창을 닫거나 다른 탭으로 갈 때 대기 중인 저장을 바로 실행
+    window.addEventListener('pagehide', () => { App.flushSave(); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') App.flushSave(); });
+    window.addEventListener('beforeunload', () => { App.flushSave(); });
     App.bindDnD();
   };
 

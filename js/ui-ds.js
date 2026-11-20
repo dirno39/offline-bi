@@ -43,7 +43,7 @@
   function stats(ds) {
     const key = ds.id + ':' + ds.rows.length + ':' + ds.fields.map((f) => f.id + f.type).join(',');
     if (App.ui.statKey === key) return App.ui.stats;
-    const lim = Math.min(ds.rows.length, 50000);
+    const lim = ds.rows.length; // 표본이 아니라 전체 행 기준
     const out = {};
     ds.fields.forEach((f) => {
       const set = new Set();
@@ -109,8 +109,6 @@
   function afterDataChange(ds) {
     D.applyCalcs(ds);
     App.ui.statKey = null;
-    App.refresh();
-    App.autosave();
   }
 
   function bindDsEvents(root) {
@@ -120,7 +118,7 @@
       const ds = App.ds(App.ui.dsPage);
       const ce = e.target.closest('[data-calcedit]');
       if (ce && ds) return App.editCalc(ds, D.fieldById(ds, ce.dataset.calcedit));
-      if (e.target.closest('.ds-name') && ds) return BI.prompt('데이터 원본 이름', ds.name, (v) => { ds.name = v; App.refresh(); App.autosave(); });
+      if (e.target.closest('.ds-name') && ds) return BI.prompt('데이터 원본 이름', ds.name, (v) => App.mutateData(() => { ds.name = v; }));
       const a = e.target.closest('[data-dsact]');
       if (!a || a.disabled) return;
       const act = a.dataset.dsact;
@@ -134,41 +132,55 @@
           if (!f) return;
           const t = await loadOne(f);
           if (!t) return;
-          // 원본만 바꾸고 기존 정리 단계는 그대로 다시 적용
-          const src = BI.Prep.ensure(ds);
+          // 원본만 바꾸고 기존 정리 단계는 그대로 다시 적용 (실행 취소 가능)
           const before = ds.fields.filter((x) => !x.calc).map((x) => x.name);
           const ns = BI.Prep.newSource(t);
-          Object.assign(src, { raw: ns.raw, text: ns.text, delim: ns.delim, _parsedDelim: ns._parsedDelim, unions: [] });
-          if (!src.steps.length) { src.skip = ns.skip; src.headerRows = ns.headerRows; delete src.baseTypes; }
-          const errs = BI.Prep.rebuild(ds);
-          ds.source = f.name;
-          afterDataChange(ds);
+          let src, diff, errs;
+          App.mutateData(() => {
+            src = BI.Prep.ensure(ds);
+            const oldCols = BI.Prep.baseCols(src);
+            ds.prep = src = Object.assign({}, src, { raw: ns.raw, text: ns.text, delim: ns.delim, _parsedDelim: ns._parsedDelim, unions: [] });
+            if (!src.steps.length) { src.skip = ns.skip; src.headerRows = ns.headerRows; delete src.baseTypes; }
+            diff = BI.Prep.compareCols(oldCols, BI.Prep.baseCols(src), src.steps);
+            errs = BI.Prep.rebuild(ds);
+            ds.source = f.name;
+            afterDataChange(ds);
+          });
           const missing = before.filter((n) => !ds.fields.some((x) => x.name === n));
+          const added = ds.fields.filter((x) => !x.calc && !before.includes(x.name)).map((x) => x.name);
           const ne = Object.keys(errs).length;
-          BI.toast('데이터를 교체했습니다 (' + ds.rows.length.toLocaleString() + '행)' + (src.steps.length ? ' · 정리 단계 ' + src.steps.length + '개 다시 적용' : '') + (ne ? ' · 실패한 단계 ' + ne + '개' : '') + (missing.length ? ' · 새 파일에 없는 필드: ' + missing.join(', ') : ''), missing.length || ne ? 'err' : 'ok');
+          const dmsg = src.steps.length ? BI.Prep.diffMessage(diff) : '';
+          const warn = missing.length || ne || dmsg || (added.length && src.steps.length);
+          BI.toast('데이터를 교체했습니다 (' + ds.rows.length.toLocaleString() + '행)' + (src.steps.length ? ' · 정리 단계 ' + src.steps.length + '개 다시 적용' : '') + (ne ? ' · 실패한 단계 ' + ne + '개' : '') + (dmsg ? ' · ' + dmsg : '') + (missing.length ? ' · 새 파일에 없는 필드: ' + missing.join(', ') : '') + (added.length ? ' · 새로 생긴 필드: ' + added.slice(0, 5).join(', ') + (added.length > 5 ? ' 외 ' + (added.length - 5) + '개' : '') : ''), ne ? 'err' : warn ? 'warn' : 'ok');
         } else if (act === 'union' && ds) {
           const f = await pickFile();
           if (!f) return;
           const t = await loadOne(f);
           if (!t) return;
           const before = ds.rows.length;
-          const src = BI.Prep.ensure(ds);
-          src.unions.push(BI.Prep.normalize(t.aoa));
-          BI.Prep.rebuild(ds);
-          afterDataChange(ds);
-          BI.toast((ds.rows.length - before).toLocaleString() + '행을 추가했습니다.', 'ok');
+          const ua = BI.Prep.normalize(t.aoa);
+          let diff, errs;
+          App.mutateData(() => {
+            let src = BI.Prep.ensure(ds);
+            diff = BI.Prep.compareCols(BI.Prep.baseCols(src), BI.Prep.baseCols(src, ua), src.steps);
+            ds.prep = src = Object.assign({}, src, { unions: (src.unions || []).concat([ua]), unionNames: (src.unionNames || []).concat([f.name]), sourceName: src.sourceName || ds.source || ds.name });
+            errs = BI.Prep.rebuild(ds);
+            afterDataChange(ds);
+          });
+          const dmsg = BI.Prep.diffMessage(diff);
+          const ne = Object.keys(errs).length;
+          BI.toast((ds.rows.length - before).toLocaleString() + '행을 추가했습니다.' + (dmsg ? ' · ' + dmsg : '') + (ne ? ' · 실패한 단계 ' + ne + '개' : ''), ne ? 'err' : dmsg ? 'warn' : 'ok');
         } else if (act === 'export' && ds) {
           App.exportData('csv', App.rawTable(ds, ds.rows), ds.name);
         } else if (act === 'delete' && ds) {
-          BI.confirm('"' + ds.name + '" 데이터 원본을 삭제할까요? 이 데이터를 사용하는 시트는 비게 됩니다.', () => {
-            App.state.datasources = App.state.datasources.filter((d) => d !== ds);
-            App.state.globalFilters = App.state.globalFilters.filter((g) => g.dsId !== ds.id);
-            App.state.sheets.forEach((s) => { if (s.dsId === ds.id) { s.dsId = App.state.datasources[0] ? null : null; } });
-            App.ui.dsPage = null;
-            App.state.active = { type: 'datasource', id: null };
-            App.undo = []; App.redo = [];
-            App.refresh();
-            App.autosave();
+          BI.confirm('"' + ds.name + '" 데이터 원본을 삭제할까요? 이 데이터를 사용하는 시트는 비게 됩니다. (Ctrl+Z로 되돌릴 수 있어요)', () => {
+            App.mutateData(() => {
+              App.state.datasources = App.state.datasources.filter((d) => d !== ds);
+              App.state.globalFilters = App.state.globalFilters.filter((g) => g.dsId !== ds.id);
+              App.state.sheets.forEach((s) => { if (s.dsId === ds.id) s.dsId = null; });
+              App.ui.dsPage = null;
+              App.state.active = { type: 'datasource', id: null };
+            });
           });
         } else if (act === 'join') joinDialog();
       } catch (err) {
@@ -182,20 +194,21 @@
       const t = e.target;
       if (t.dataset.ftype) {
         const f = D.fieldById(ds, t.dataset.ftype);
-        App.setFieldType(ds, f, t.value);
-        afterDataChange(ds);
+        App.mutateData(() => { App.setFieldType(ds, f, t.value); afterDataChange(ds); });
       } else if (t.dataset.frole) {
-        D.fieldById(ds, t.dataset.frole).role = t.value;
-        App.autosave();
+        const f = D.fieldById(ds, t.dataset.frole);
+        if (f.aggCalc) { t.value = 'measure'; return; }
+        App.mutateData(() => { f.role = t.value; });
       } else if (t.dataset.fname) {
         const f = D.fieldById(ds, t.dataset.fname);
         const v = t.value.trim();
+        if (v === f.name) return;
         if (!v || ds.fields.some((x) => x !== f && x.name.toLowerCase() === v.toLowerCase())) { BI.toast('이름이 비었거나 중복됩니다.', 'err'); t.value = f.name; return; }
-        ds.fields.forEach((x) => { if (x.calc) x.calc = BI.Calc.renameRef(x.calc, f.name, v); });
-        if (!f.calc) BI.Prep.record(ds, { t: 'rename', col: f.name, to: v });
-        f.name = v;
-        App.refresh();
-        App.autosave();
+        App.mutateData(() => {
+          ds.fields.forEach((x) => { if (x.calc) x.calc = BI.Calc.renameRef(x.calc, f.name, v); });
+          if (!f.calc) BI.Prep.record(ds, { t: 'rename', col: f.name, to: v });
+          f.name = v;
+        });
       }
     });
   }
@@ -207,35 +220,70 @@
     const L0 = App.ds(App.ui.dsPage) || dss[0];
     const R0 = dss.find((d) => d !== L0) || dss[0];
     const body = BI.h('<div class="join-dlg">' +
-      '<div class="join-grid"><div><label>왼쪽 테이블</label><select id="jL">' + opt(L0.id) + '</select><label>키 필드</label><select id="jLk">' + fopt(L0) + '</select></div>' +
+      '<div class="join-grid"><div><label>왼쪽 테이블</label><select id="jL">' + opt(L0.id) + '</select><label>키 필드</label><select id="jLk"></select></div>' +
       '<div class="join-type"><label>조인 유형</label><select id="jT"><option value="inner">내부 조인 (Inner)</option><option value="left" selected>왼쪽 조인 (Left)</option><option value="full">완전 외부 조인 (Full)</option></select></div>' +
-      '<div><label>오른쪽 테이블</label><select id="jR">' + opt(R0.id) + '</select><label>키 필드</label><select id="jRk">' + fopt(R0) + '</select></div></div>' +
-      '<label>새 데이터 원본 이름</label><input class="inp" id="jN" style="width:100%" value="' + BI.esc(L0.name + ' + ' + R0.name) + '"><p class="muted">조인 결과는 새 데이터 원본으로 만들어집니다. 키 값은 문자열로 비교합니다.</p></div>');
-    const sync = (side) => {
-      const d = App.ds(BI.$('#j' + side, body).value);
-      BI.$('#j' + side + 'k', body).innerHTML = fopt(d);
-      // 같은 이름 키 자동 선택
-      const other = App.ds(BI.$('#j' + (side === 'L' ? 'R' : 'L'), body).value);
-      const lk = BI.$('#j' + side + 'k', body);
-      const common = d.fields.find((f) => other.fields.some((g) => g.name === f.name));
-      if (common) lk.value = common.id;
-      BI.$('#jN', body).value = App.ds(BI.$('#jL', body).value).name + ' + ' + App.ds(BI.$('#jR', body).value).name;
+      '<div><label>오른쪽 테이블</label><select id="jR">' + opt(R0.id) + '</select><label>키 필드</label><select id="jRk"></select></div></div>' +
+      '<label class="chk"><input type="checkbox" id="jZ"> 코드 앞자리 0·공백 맞추기 <span class="muted">(숫자 5930 = 문자 "005930")</span></label>' +
+      '<div class="join-prev" id="jP"></div>' +
+      '<label>새 데이터 원본 이름</label><input class="inp" id="jN" style="width:100%" value=""><p class="muted">조인 결과는 새 데이터 원본으로 만들어지고 계산된 필드 수식도 함께 옮겨져요. 키 값은 문자열로 비교합니다.</p></div>');
+    const $ = (id) => BI.$('#' + id, body);
+    let nameTouched = false;
+    $('jN').oninput = () => { nameTouched = true; };
+    // 키 다시 고르기: 양쪽 모두, 같은 이름 필드 우선 (ID·코드처럼 보이는 이름 → 그 외), 없으면 첫 필드
+    const pickKeys = () => {
+      const L = App.ds($('jL').value), R = App.ds($('jR').value);
+      $('jLk').innerHTML = fopt(L);
+      $('jRk').innerHTML = fopt(R);
+      if (L === R) return;
+      const lf = L.fields.filter((f) => !f.calc), rf = R.fields.filter((f) => !f.calc);
+      const norm = (s) => s.toLowerCase().replace(/\s+/g, '');
+      const common = lf.filter((f) => rf.some((g) => norm(g.name) === norm(f.name)));
+      const keyish = /(id$|_id|코드|code|번호|no$|key|사번|키)/i;
+      const best = common.find((f) => keyish.test(f.name)) || common.find((f) => f.type !== 'number' || f.role === 'dimension') || common[0];
+      if (best) {
+        $('jLk').value = best.id;
+        $('jRk').value = rf.find((g) => norm(g.name) === norm(best.name)).id;
+      }
     };
-    BI.$('#jL', body).onchange = () => sync('L');
-    BI.$('#jR', body).onchange = () => sync('R');
-    sync('L'); sync('R');
+    const preview = () => {
+      const L = App.ds($('jL').value), R = App.ds($('jR').value);
+      const P = $('jP');
+      if (!nameTouched) $('jN').value = L.name + ' + ' + R.name;
+      if (L === R) { P.innerHTML = '<div class="err-txt">왼쪽과 오른쪽에 같은 테이블을 고를 수 없어요.</div>'; return null; }
+      const st = D.joinStats(L, R, $('jLk').value, $('jRk').value, { normalize: $('jZ').checked });
+      const pct = BI.formatNumber(st.rate, 'pct');
+      let h = '<div>왼쪽 ' + st.leftRows.toLocaleString() + '행 중 <b>' + st.matched.toLocaleString() + '행(' + pct + ')</b>이 오른쪽과 맞아요 · 고유 키 ' + st.distinctMatched.toLocaleString() + ' / ' + st.distinct.toLocaleString() + '개</div>';
+      if (st.typeMismatch) h += '<div class="warn-txt">키 유형이 달라요: 왼쪽 ' + typeName(st.typeL) + ', 오른쪽 ' + typeName(st.typeR) + '.</div>';
+      if (!$('jZ').checked && st.hitNorm > st.matched) h += '<div class="warn-txt">앞자리 0을 맞추면 ' + st.hitNorm.toLocaleString() + '행이 맞아요. 위의 "코드 앞자리 0 맞추기"를 켜 보세요.</div>';
+      if (!st.matched) h += '<div class="err-txt">맞는 키가 하나도 없어요. 키 필드를 확인하세요.</div>';
+      else if (st.rate < 0.5) h += '<div class="warn-txt">절반 이상이 맞지 않아요. 키 필드가 맞는지 확인하세요.</div>';
+      P.innerHTML = h;
+      return st;
+    };
+    const typeName = (t) => ({ string: '문자열', number: '숫자', date: '날짜', bool: '부울' }[t] || t);
+    $('jL').onchange = () => { pickKeys(); preview(); };
+    $('jR').onchange = () => { pickKeys(); preview(); };
+    $('jLk').onchange = preview; $('jRk').onchange = preview; $('jZ').onchange = preview;
+    pickKeys();
+    preview();
     BI.modal({
-      title: '조인으로 데이터 결합', width: 620, body,
+      title: '조인으로 데이터 결합', width: 620, body, enterSubmits: false,
       buttons: [{ text: '취소' }, {
         text: '조인 실행', primary: true, onClick: () => {
-          const L = App.ds(BI.$('#jL', body).value), R = App.ds(BI.$('#jR', body).value);
-          const nd = D.join(L, R, BI.$('#jLk', body).value, BI.$('#jRk', body).value, BI.$('#jT', body).value, BI.$('#jN', body).value.trim());
-          App.state.datasources.push(nd);
-          App.ui.dsPage = nd.id;
-          App.state.active = { type: 'datasource', id: nd.id };
-          App.refresh();
-          App.autosave();
-          BI.toast('조인 결과: ' + nd.rows.length.toLocaleString() + '행', 'ok');
+          const L = App.ds($('jL').value), R = App.ds($('jR').value);
+          if (L === R) { BI.toast('왼쪽과 오른쪽에 서로 다른 테이블을 고르세요.', 'err'); return false; }
+          const st = preview();
+          const run = () => {
+            const nd = D.join(L, R, $('jLk').value, $('jRk').value, $('jT').value, $('jN').value.trim(), { normalize: $('jZ').checked });
+            App.mutateData(() => { App.state.datasources.push(nd); }, null, { label: '조인' });
+            App.ui.dsPage = nd.id;
+            App.state.active = { type: 'datasource', id: nd.id };
+            App.refresh();
+            App.autosave();
+            BI.toast('조인 결과: ' + nd.rows.length.toLocaleString() + '행 · 왼쪽 ' + BI.formatNumber(st.rate, 'pct') + ' 매칭', st.rate < 0.5 || st.typeMismatch ? 'warn' : 'ok');
+          };
+          if (!st.matched) { BI.confirm('맞는 키가 하나도 없어요. 오른쪽 값이 전부 Null인 결과가 만들어져요. 그래도 실행할까요?', run); return; }
+          run();
         },
       }],
     });
