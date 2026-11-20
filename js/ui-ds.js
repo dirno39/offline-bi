@@ -9,12 +9,18 @@
     if (!st.datasources.length) {
       main.innerHTML =
         '<div class="welcome"><div class="welcome-box">' +
-        '<div class="wl-logo"><svg viewBox="0 0 48 48" width="56" height="56"><rect x="4" y="26" width="8" height="18" rx="1" fill="#4e79a7"/><rect x="16" y="16" width="8" height="28" rx="1" fill="#f28e2b"/><rect x="28" y="8" width="8" height="36" rx="1" fill="#59a14f"/><rect x="40" y="20" width="4" height="24" rx="1" fill="#e15759"/></svg></div>' +
-        '<h1>Offline BI</h1><p class="muted">인터넷 연결 없이 동작하는 셀프서비스 BI 도구 · 데이터는 이 PC 밖으로 전송되지 않습니다</p>' +
-        '<div class="drop-zone" id="dropZone"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="#4e79a7" stroke-width="1.6"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>' +
-        '<p><b>엑셀 · CSV 파일을 여기로 끌어다 놓으세요</b></p><p class="muted">CSV, TSV, TXT, XLSX, XLS, XLSM, ODS, JSON 지원 · UTF-8/EUC-KR 자동 인식</p>' +
-        '<div class="wl-btns"><button class="btn primary lg" data-cmd="addData">데이터 파일 열기</button><button class="btn lg" data-cmd="open">통합 문서 열기 (.obi)</button><button class="btn lg" data-cmd="sample">샘플 데이터로 시작</button></div></div>' +
-        '<div class="wl-feat"><div><b>드래그 앤 드롭 분석</b><span>필드를 열/행/마크 선반에 끌어 놓아 시각화</span></div><div><b>30여 종 차트</b><span>막대·라인·콤보·파이·트리맵·히트맵·산점도·박스플롯·워터폴·퍼널·파레토·생키·게이지·KPI 등</span></div><div><b>필터 · 계산 필드</b><span>목록/범위/기간/상위 N 필터, 테이블 계산, 수식 기반 계산된 필드</span></div><div><b>대시보드</b><span>여러 시트 배치, 필터 카드, 시트 간 동작 필터, PNG/PDF 내보내기</span></div></div>' +
+        '<div class="wl-intro">' +
+        '<div class="wl-logo"><svg viewBox="0 0 32 32" width="52" height="52" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#3563e9"/><rect x="7.5" y="16" width="4.5" height="9" rx="2.25" fill="#fff" fill-opacity=".55"/><rect x="13.75" y="11" width="4.5" height="14" rx="2.25" fill="#fff" fill-opacity=".8"/><rect x="20" y="6.5" width="4.5" height="18.5" rx="2.25" fill="#fff"/></svg></div>' +
+        '<h1>파일을 놓으면<br><em>분석</em>이 바로 시작돼요</h1>' +
+        '<p class="wl-lead">Offline BI는 인터넷 연결 없이 동작하는 셀프서비스 BI 도구예요. 필드를 끌어다 놓아 차트와 대시보드를 만들고, 데이터는 이 PC 밖으로 나가지 않아요.</p>' +
+        '<div class="wl-btns"><button class="btn primary lg" data-cmd="addData">데이터 파일 열기</button><button class="btn lg" data-cmd="sample">샘플 데이터로 시작</button><button class="btn lg ghost" data-cmd="open">통합 문서 열기 (.obi)</button></div>' +
+        '<ul class="wl-feat"><li><b>드래그 앤 드롭 분석</b><span>필드를 열·행·마크 선반에 끌어 놓아 시각화</span></li><li><b>30여 종 차트</b><span>막대·라인·콤보·트리맵·히트맵·산점도·워터폴·생키·KPI 등</span></li><li><b>필터 · 계산된 필드</b><span>목록·범위·기간·상위 N 필터, 테이블 계산, 수식</span></li><li><b>대시보드</b><span>필터 카드, 시트 간 동작 필터, PNG·PDF 내보내기</span></li></ul>' +
+        '</div>' +
+        '<div class="wl-side"><div class="drop-zone" id="dropZone" data-cmd="addData" role="button" tabindex="0" title="클릭해서 파일 선택">' +
+        '<div class="dz-ico"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5"/><path d="M4 14v4.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V14"/></svg></div>' +
+        '<p class="dz-title">엑셀 · CSV 파일을 여기로 끌어다 놓으세요</p><p class="dz-sub">UTF-8 / EUC-KR 인코딩 자동 인식 · 여러 시트 선택 가능</p>' +
+        '<div class="dz-fmts"><span>CSV</span><span>TSV</span><span>TXT</span><span>XLSX</span><span>XLS</span><span>XLSM</span><span>ODS</span><span>JSON</span></div>' +
+        '</div><div class="wl-privacy">' + BI.ICON.shield + '서버·설치·외부 연결 없이 브라우저 안에서만 처리돼요</div></div>' +
         '</div></div>';
       return;
     }

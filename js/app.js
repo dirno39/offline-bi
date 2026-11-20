@@ -230,11 +230,11 @@
       db.name = '매출 대시보드';
       db.title = '매출 현황 대시보드';
       db.items = [
-        { id: BI.uid('it'), type: 'sheet', sheetId: s5.id, x: 0, y: 0, w: 24, h: 13 },
-        { id: BI.uid('it'), type: 'sheet', sheetId: s1.id, x: 0, y: 13, w: 14, h: 30, filter: true },
-        { id: BI.uid('it'), type: 'sheet', sheetId: s4.id, x: 14, y: 13, w: 10, h: 30, filter: true },
-        { id: BI.uid('it'), type: 'sheet', sheetId: s2.id, x: 0, y: 43, w: 12, h: 34, filter: true },
-        { id: BI.uid('it'), type: 'sheet', sheetId: s3.id, x: 12, y: 43, w: 12, h: 34 },
+        { id: BI.uid('it'), type: 'sheet', sheetId: s5.id, x: 0, y: 0, w: 24, h: 15 },
+        { id: BI.uid('it'), type: 'sheet', sheetId: s1.id, x: 0, y: 15, w: 14, h: 30, filter: true },
+        { id: BI.uid('it'), type: 'sheet', sheetId: s4.id, x: 14, y: 15, w: 10, h: 30, filter: true },
+        { id: BI.uid('it'), type: 'sheet', sheetId: s2.id, x: 0, y: 45, w: 12, h: 34, filter: true },
+        { id: BI.uid('it'), type: 'sheet', sheetId: s3.id, x: 12, y: 45, w: 12, h: 34 },
       ];
       App.state.dashboards.push(db);
       App.state.tabs.push({ type: 'dashboard', id: db.id });
@@ -361,6 +361,8 @@
         if (!sh) return;
         App.mutate(() => { sh.shelves = { columns: [], rows: [], color: null, size: null, label: null, detail: [], tooltip: [] }; sh.filters = []; sh.chartType = 'auto'; });
         break;
+      case 'sortAsc': App.quickSort(false); break;
+      case 'sortDesc': App.quickSort(true); break;
       case 'showMe': App.ui.showMe = !App.ui.showMe; App.refresh(); break;
       case 'exportPng': App.exportPng(); break;
       case 'exportCsv': App.exportData('csv'); break;
@@ -397,12 +399,63 @@
     }
   };
 
+  /* ---------- 빠른 정렬 (툴바) ----------
+     측정값 축의 반대편에 있는 마지막 불연속 차원을 측정값 합계 기준으로 정렬.
+     측정값이 없으면 이름순. 같은 방향을 다시 누르면 정렬 해제. */
+  App.sortTarget = function (sh) {
+    sh = sh || App.activeSheet();
+    if (!sh) return null;
+    const ds = App.ds(sh.dsId);
+    const S = sh.shelves;
+    const pick = (arr) => { for (let i = arr.length - 1; i >= 0; i--) { const p = arr[i]; if (!p.agg && !(ds && BI.Query.isTimeline(p, ds))) return p; } return null; };
+    const hasMeas = (a) => a.some((p) => p.agg);
+    let t = null;
+    if (hasMeas(S.columns)) t = pick(S.rows);
+    if (!t && hasMeas(S.rows)) t = pick(S.columns);
+    if (!t) t = pick(S.rows) || pick(S.columns);
+    if (!t && S.color && !S.color.agg) t = S.color;
+    const anyMeas = hasMeas(S.columns) || hasMeas(S.rows) || ['color', 'size', 'label'].some((k) => S[k] && S[k].agg);
+    return t ? { pill: t, byMeasure: anyMeas } : null;
+  };
+  // 표 머리글 클릭: 차원 = 이름 오름→내림→해제, 측정값 = 값 내림→오름→해제
+  App.tableSort = function (sheet, fid, mi) {
+    const find = () => { const S = sheet.shelves; return S.rows.concat(S.columns, [S.color, S.label], S.detail || [], S.tooltip || []).find((p) => p && !p.agg && p.f === fid); };
+    if (!find()) return;
+    App.mutate(() => {
+      const p = find();
+      if (mi == null) {
+        const next = { undefined: 'asc', asc: 'desc', desc: undefined }[p.sort === 'asc' || p.sort === 'desc' ? p.sort : undefined];
+        if (next) p.sort = next; else delete p.sort;
+        delete p.sortBy;
+      } else {
+        const same = (p.sort === 'mdesc' || p.sort === 'masc') && (p.sortBy || 0) === mi;
+        const next = !same ? 'mdesc' : p.sort === 'mdesc' ? 'masc' : undefined;
+        if (next) { p.sort = next; p.sortBy = mi; } else { delete p.sort; delete p.sortBy; }
+      }
+    });
+  };
+
+  App.quickSort = function (desc) {
+    const sh = App.activeSheet();
+    const tg = App.sortTarget(sh);
+    if (!tg) { BI.toast('정렬할 차원이 없어요. 열이나 행에 차원을 먼저 놓아 주세요.', 'err'); return; }
+    const mode = tg.byMeasure ? (desc ? 'mdesc' : 'masc') : (desc ? 'desc' : 'asc');
+    App.mutate(() => {
+      const t = App.sortTarget(sh).pill;
+      if (t.sort === mode) delete t.sort; else { t.sort = mode; delete t.sortBy; }
+    });
+  };
+
   App.renderToolbar = function () {
     const tb = BI.$('#toolbar');
     BI.$('[data-cmd=undo]', tb).disabled = !App.undo.length;
     BI.$('[data-cmd=redo]', tb).disabled = !App.redo.length;
     const isSheet = !!App.activeSheet();
-    ['swap', 'clear', 'showMe', 'calc'].forEach((c) => { const b = BI.$('[data-cmd=' + c + ']', tb); if (b) b.disabled = !isSheet; });
+    ['swap', 'clear', 'showMe', 'calc', 'sortAsc', 'sortDesc'].forEach((c) => { const b = BI.$('[data-cmd=' + c + ']', tb); if (b) b.disabled = !isSheet; });
+    const tg = isSheet ? App.sortTarget() : null;
+    const cur = tg ? tg.pill.sort : null;
+    BI.$('[data-cmd=sortAsc]', tb).classList.toggle('on', cur === 'masc' || cur === 'asc');
+    BI.$('[data-cmd=sortDesc]', tb).classList.toggle('on', cur === 'mdesc' || cur === 'desc');
     BI.$('[data-cmd=showMe]', tb).classList.toggle('on', App.ui.showMe && isSheet);
     BI.$('#wbName').textContent = App.state.name || '';
   };
@@ -451,11 +504,12 @@
     out.rows = rows;
     out.ms = performance.now() - t0;
     box._out = out;
+    box.style.setProperty('--fs', out.fontScale || 1);
     if (out.option) {
       show('c');
       let ec = ch._ec;
       if (!ec || ec.isDisposed()) {
-        ec = ch._ec = echarts.init(ch, null, { renderer: 'canvas' });
+        ec = ch._ec = echarts.init(ch, BI.Charts.THEME, { renderer: 'canvas' });
         ro && ro.observe(ch);
       }
       ch.style.minHeight = out.minHeight ? out.minHeight + 'px' : '';
@@ -472,6 +526,8 @@
       if (ch._ec) { ro && ro.unobserve(ch); ch._ec.dispose(); ch._ec = null; }
       hh.innerHTML = out.html;
       hh.onclick = (e) => {
+        const th = e.target.closest('th[data-sortf]');
+        if (th) { App.tableSort(sheet, th.dataset.sortf, th.dataset.sortm != null ? +th.dataset.sortm : null); return; }
         const td = e.target.closest('td[data-r]');
         if (!td || !opts.onSelect) return;
         opts.onSelect(BI.Charts.selectionForRow(box._out, +td.dataset.r), e);
