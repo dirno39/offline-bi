@@ -22,7 +22,7 @@
     App.state.tabs.filter((t) => t.type === 'sheet').forEach((t) => {
       const s = App.sheet(t.id);
       if (!s) return;
-      h += '<li draggable="true" data-dash-sheet="' + s.id + '" class="' + (used.has(s.id) ? 'used' : '') + '" title="드래그하여 추가 / 더블클릭하면 빈 곳에 추가">' + (BI.Charts.byId[s.chartType] || BI.Charts.byId.auto).icon + '<span>' + BI.esc(s.name) + '</span></li>';
+      h += '<li draggable="true" data-dash-sheet="' + s.id + '" class="' + (used.has(s.id) ? 'used' : '') + '" title="드래그하여 추가 / 더블클릭하면 빈 곳에 추가">' + App.sheetIcon(s) + '<span>' + BI.esc(s.name) + '</span></li>';
     });
     h += '</ul><div class="sec-hd">개체</div><ul class="dash-list"><li draggable="true" data-dash-obj="text"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 5h14M12 5v14"/></svg><span>텍스트</span></li></ul>';
     h += '<div class="sec-hd">레이아웃</div><div class="opts">';
@@ -42,11 +42,55 @@
     return out;
   }
 
+  /* 대시보드에 적용 중인 조건: 필터 카드 + (카드 없이) 거르고 있는 전역 필터 + 동작 필터 선택 */
+  App.dashConds = function (db) {
+    const out = [];
+    const sheets = db.items.filter((i) => i.type === 'sheet').map((i) => App.sheet(i.sheetId)).filter(Boolean);
+    const dsIds = new Set(sheets.map((s) => s.dsId));
+    const add = (f, dsId) => { const ds = App.ds(dsId); if (!ds) return; const t = App.filterText(f, ds); out.push({ k: '필터', name: t.name, value: t.value, all: t.all }); };
+    dashFilters(db).forEach((x) => add(x.f, x.dsId));
+    App.state.globalFilters.forEach((f) => { if (!f.card && dsIds.has(f.dsId)) { const ds = App.ds(f.dsId); if (ds && !App.filterText(f, ds).all) add(f, f.dsId); } });
+    if (db.selection) out.push({ k: '선택', name: '', value: db.selection.label });
+    return out;
+  };
+
+  /* 인쇄용 배치: 개체가 페이지 경계에 걸치면 그 행부터 아래를 다음 페이지로 밀어 냄 (on=false면 원래대로) */
+  App.dashPrintLayout = function (db, on) {
+    const cv = BI.$('#dashCanvas');
+    if (!cv) return;
+    const els = new Map(BI.$$('.dash-item', cv).map((e) => [e.dataset.item, e]));
+    const maxY = db.items.reduce((a, i) => Math.max(a, i.y + i.h), 0);
+    if (!on) {
+      db.items.forEach((it) => { const el = els.get(it.id); if (el) itemStyle(el, it); });
+      cv.style.height = Math.max(maxY * ROWH + 160, 500) + 'px';
+      return;
+    }
+    const PH = App.PRINT.h;
+    const off0 = cv.getBoundingClientRect().top - BI.$('#main').getBoundingClientRect().top;
+    const shifts = [];
+    const topOf = (it) => it.y * ROWH + shifts.reduce((a, s) => a + (it.y >= s.y ? s.d : 0), 0);
+    const hOf = (it) => Math.min(it.h * ROWH, PH - 6);
+    const items = db.items.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+    items.forEach((it) => {
+      const t = off0 + topOf(it), pg = Math.floor(t / PH);
+      if (t + hOf(it) > (pg + 1) * PH + 1 && t > pg * PH + 1) shifts.push({ y: it.y, d: (pg + 1) * PH - t });
+    });
+    let bottom = 0;
+    items.forEach((it) => {
+      const el = els.get(it.id);
+      if (!el) return;
+      el.style.top = topOf(it) + 'px';
+      el.style.height = hOf(it) + 'px';
+      bottom = Math.max(bottom, topOf(it) + hOf(it));
+    });
+    cv.style.height = bottom + 'px';
+  };
+
   function renderHead(db) {
     const head = BI.$('#dashHead');
     let h = '<div class="dash-title" title="더블클릭하여 편집">' + BI.esc(db.title || db.name) + '</div>';
     if (db.selection) h += '<div class="sel-chip">선택: ' + BI.esc(db.selection.label) + ' <button data-dact="clearSel" title="선택 해제">' + BI.ICON.x + '</button></div>';
-    h += '<div class="dash-filters" id="dashFilters"></div>';
+    h += '<div class="dash-filters" id="dashFilters"></div><div class="print-cond" id="dashCond">' + App.condHtml(App.dashConds(db)) + '</div>';
     head.innerHTML = h;
     if (db.showFilters === false) return;
     const fl = dashFilters(db);
@@ -60,7 +104,7 @@
       const sub = document.createElement('div');
       sub.className = 'dash-fgroup';
       box.appendChild(sub);
-      App.renderFilterCards(sub, flts, ds, () => renderCanvas(db));
+      App.renderFilterCards(sub, flts, ds, () => { renderCanvas(db); const c = BI.$('#dashCond'); if (c) c.innerHTML = App.condHtml(App.dashConds(db)); }, { compact: true });
     });
   }
 
@@ -104,7 +148,8 @@
         const bd = BI.$('.di-bd', el);
         if (sheet) {
           const conds = sel && sel.src !== it.id && sel.dsId === sheet.dsId ? sel.conds : null;
-          App.renderChartInto(bd, sheet, { conds, onSelect: (s) => onSelect(db, it, s), emptyHtml: '시트에 필드가 없습니다.' });
+          const focus = sel && sel.src === it.id ? sel.conds : null;
+          App.renderChartInto(bd, sheet, { conds, focus, onSelect: (s) => onSelect(db, it, s), emptyHtml: '시트에 필드가 없습니다.' });
         }
       } else {
         title.textContent = '텍스트';
@@ -133,6 +178,22 @@
     App.autosave();
   }
 
+  /* 겹침 방지: fixed(방금 놓은 개체)는 그대로 두고, 겹치는 개체를 그 아래로 밀어 냄 (격자 단위 유지) */
+  function resolveOverlap(items, fixed) {
+    const ov = (a, b) => a !== b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    const placed = fixed ? [fixed] : [];
+    items.filter((i) => i !== fixed).sort((a, b) => a.y - b.y || a.x - b.x).forEach((it) => {
+      let hit, guard = 0;
+      while ((hit = placed.find((p) => ov(p, it))) && guard++ < 500) it.y = hit.y + hit.h;
+      placed.push(it);
+    });
+    // 위쪽 빈 줄 메우기 (격자 대시보드처럼 위로 붙임)
+    items.slice().sort((a, b) => a.y - b.y || a.x - b.x).forEach((it) => {
+      while (it.y > 0 && !items.some((o) => o !== it && ov(o, Object.assign({}, it, { y: it.y - 1 })))) it.y--;
+    });
+  }
+  App.dashResolveOverlap = resolveOverlap;
+
   App.dashDrop = function (cv, d, e) {
     const db = App.activeDash();
     if (!db) return;
@@ -142,8 +203,9 @@
     const w = d.kind === 'dashobj' ? 8 : 12, h = d.kind === 'dashobj' ? 6 : 30;
     x = Math.max(0, Math.min(COLS - w, x - 2));
     App.mutate(() => {
-      if (d.kind === 'dashsheet') db.items.push({ id: BI.uid('it'), type: 'sheet', sheetId: d.sheetId, x, y, w, h, filter: false });
-      else db.items.push({ id: BI.uid('it'), type: 'text', text: '', x, y, w, h, size: 16, bold: true });
+      const it = d.kind === 'dashsheet' ? { id: BI.uid('it'), type: 'sheet', sheetId: d.sheetId, x, y, w, h, filter: false } : { id: BI.uid('it'), type: 'text', text: '', x, y, w, h, size: 16, bold: true };
+      db.items.push(it);
+      resolveOverlap(db.items, it);
     });
   };
 
@@ -162,7 +224,7 @@
       sheets.forEach((it) => {
         const s = App.sheet(it.sheetId);
         const isKpi = s && s.chartType === 'kpi';
-        if (isKpi) { if (col) { y += 30; col = 0; } it.x = 0; it.y = y; it.w = COLS; it.h = 13; y += 13; return; }
+        if (isKpi) { if (col) { y += 30; col = 0; } it.x = 0; it.y = y; it.w = COLS; it.h = 15; y += 15; return; }
         it.x = col * w; it.y = y; it.w = w; it.h = 30;
         col++;
         if (col >= cols) { col = 0; y += 30; }
@@ -208,7 +270,7 @@
             { text: '시트로 이동', onClick: () => App.activate('sheet', it.sheetId) },
             { text: '필터로 사용', checked: !!it.filter, onClick: () => App.mutate(() => { it.filter = !it.filter; }) },
             { text: '제목 숨기기', checked: !!it.hideTitle, onClick: () => App.mutate(() => { it.hideTitle = !it.hideTitle; }) },
-            { text: '전체 너비로', onClick: () => App.mutate(() => { it.x = 0; it.w = COLS; }) },
+            { text: '전체 너비로', onClick: () => App.mutate(() => { it.x = 0; it.w = COLS; resolveOverlap(db.items, it); }) },
             { sep: true },
             { text: '이미지로 저장 (PNG)', onClick: () => { const h = BI.$('.chart-host', el); if (h && h._ec) BI.downloadDataURL((App.sheet(it.sheetId) || {}).name + '.png', h._ec.getDataURL({ pixelRatio: 2, backgroundColor: '#fff' })); else BI.toast('차트가 아닌 항목입니다.'); } },
             { text: '제거', onClick: () => App.mutate(() => { db.items = db.items.filter((i) => i !== it); }) },
@@ -267,74 +329,69 @@
         el.classList.remove('moving');
         ghost.remove();
         if (cur.x === o.x && cur.y === o.y && cur.w === o.w && cur.h === o.h) return;
-        App.lightCommit(() => Object.assign(it, cur), () => renderCanvas(db));
+        App.lightCommit(() => { Object.assign(it, cur); resolveOverlap(db.items, it); }, () => renderCanvas(db));
       };
       document.addEventListener('pointermove', mv);
       document.addEventListener('pointerup', up);
     });
   }
 
-  /* 대시보드 PNG 내보내기 */
+  /* 대시보드 PNG 내보내기: 제목 + 적용 중인 필터·선택 조건 줄 + 화면과 같은 배치의 개체 */
   App.exportDashPng = async function (db) {
     const cv = BI.$('#dashCanvas');
     if (!cv) return;
-    const scale = 2;
-    const W = cv.clientWidth;
+    const scale = 2, PAD = 12;
+    const W = cv.clientWidth + PAD * 2;
     const maxY = db.items.reduce((a, i) => Math.max(a, i.y + i.h), 0) * ROWH;
-    const TH = 50;
+    const head = App.imageHeader(db.title || db.name, App.dashConds(db), W - PAD * 2 - 36);
+    const HH = head.h + 18; // 머리글 패널 높이
+    const TH = PAD + HH + 2;
+    const H = TH + maxY + PAD;
     const canvas = document.createElement('canvas');
     canvas.width = W * scale;
-    canvas.height = (maxY + TH + 10) * scale;
+    canvas.height = H * scale;
     const g = canvas.getContext('2d');
     g.scale(scale, scale);
-    g.fillStyle = '#f4f6f9';
-    g.fillRect(0, 0, W, maxY + TH + 10);
-    g.fillStyle = '#1f2d3d';
-    g.font = 'bold 20px ' + BI.Charts.FONT;
-    g.fillText(db.title || db.name, 12, 32);
-    // file:// 환경에서는 cssRules 접근이 막히므로 내보내기용 최소 스타일을 함께 포함
-    const EXPORT_CSS = '*{box-sizing:border-box}.html-host{position:absolute;inset:0;overflow:hidden;font-size:12px;color:#1f2d3d}' +
-      '.vt-wrap{padding:6px 12px}table.vt{border-collapse:collapse;font-size:12px}table.vt th,table.vt td{border:1px solid #e3e7ec;padding:4px 10px;white-space:nowrap}' +
-      'table.vt thead th{background:#f5f7fa;font-weight:600;text-align:center}table.vt th.rh{background:#fafbfc;text-align:left;font-weight:600}table.vt td{text-align:right}table.vt .tot{background:#f0f3f7;font-weight:700}' +
-      '.kpi-wrap{display:flex;flex-wrap:wrap;gap:8px;padding:6px;height:100%}.kpi-card{flex:1 1 180px;min-width:160px;background:#fafbfd;border:1px solid #e9edf1;border-radius:8px;padding:6px 12px;display:flex;flex-direction:column;justify-content:center}' +
-      '.kpi-title{font-size:12px;color:#5b6b7b;font-weight:600}.kpi-title small{font-weight:400;color:#7a8794}.kpi-value{font-size:22px;font-weight:800;margin:4px 0}.kpi-delta{font-size:12px;font-weight:700}.kpi-delta span{font-weight:400;color:#7a8794}.kpi-delta.up{color:#2e8b57}.kpi-delta.down{color:#c0392b}.kpi-spark{width:100%;height:34px}' +
-      '.dash-text{padding:8px 14px;line-height:1.5}';
-    let cssText = EXPORT_CSS;
-    try { cssText += Array.from(document.styleSheets).map((s) => { try { return Array.from(s.cssRules).map((r) => r.cssText).join('\n'); } catch (e) { return ''; } }).join('\n'); } catch (e) { /* noop */ }
-    const load = (src) => new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src; });
+    g.fillStyle = BI.cssVar('--canvas', '#eceff3');
+    g.fillRect(0, 0, W, H);
+    const rr = (x, y, w, h, r) => { g.beginPath(); if (g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h); };
+    g.fillStyle = BI.cssVar('--panel', '#fff');
+    rr(PAD + 4, PAD, W - PAD * 2 - 8, HH, 12); g.fill();
+    head.draw(g, PAD + 20, PAD + 10);
     const cvr = cv.getBoundingClientRect();
+    const F = BI.Charts.FONT;
     for (const el of BI.$$('.dash-item', cv)) {
       const r = el.getBoundingClientRect();
-      const x = r.left - cvr.left, y = r.top - cvr.top + TH;
-      g.fillStyle = '#fff';
-      g.fillRect(x + 3, y + 3, r.width - 6, r.height - 6);
-      const hd = BI.$('.di-hd', el);
-      if (!el.classList.contains('no-title')) {
-        g.fillStyle = '#333';
-        g.font = 'bold 13px ' + BI.Charts.FONT;
-        g.fillText(BI.$('.di-title', el).textContent, x + 12, y + 22);
+      const x = r.left - cvr.left + PAD, y = r.top - cvr.top + TH;
+      g.fillStyle = BI.cssVar('--panel', '#fff');
+      rr(x + 4, y + 4, r.width - 8, r.height - 8, 12); g.fill();
+      if (el.classList.contains('is-src')) { g.strokeStyle = BI.cssVar('--accent-line', '#c5d4fb'); g.lineWidth = 2; g.stroke(); }
+      if (!el.classList.contains('no-title') && !el.classList.contains('is-text')) {
+        const t = BI.$('.di-title', el);
+        g.fillStyle = BI.cssVar('--text', '#191f28');
+        g.font = '700 13px ' + F;
+        g.textBaseline = 'middle';
+        const al = t.style.textAlign || 'left';
+        g.textAlign = al;
+        g.fillText(t.textContent, al === 'center' ? x + r.width / 2 : al === 'right' ? x + r.width - 18 : x + 18, y + 22);
+        g.textAlign = 'left';
+        g.textBaseline = 'alphabetic';
       }
       const bd = BI.$('.di-bd', el);
       const br = bd.getBoundingClientRect();
-      const bx = br.left - cvr.left, by = br.top - cvr.top + TH;
+      const bx = br.left - cvr.left + PAD, by = br.top - cvr.top + TH;
       const ch = BI.$('.chart-host', el);
       if (ch && ch._ec && ch.style.display !== 'none') {
-        const im = await load(ch._ec.getDataURL({ pixelRatio: scale, backgroundColor: '#fff' }));
+        const im = await App.loadImage(ch._ec.getDataURL({ pixelRatio: scale, backgroundColor: '#fff' }));
         if (im) g.drawImage(im, bx, by, br.width, br.height);
       } else {
         const hh = BI.$('.html-host', el);
         if (hh && hh.style.display !== 'none') {
-          const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + br.width + '" height="' + br.height + '"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="font-family:' + BI.Charts.FONT.replace(/"/g, "'") + ';position:relative;width:' + br.width + 'px;height:' + br.height + 'px;overflow:hidden;background:#fff"><style>' + cssText.replace(/</g, '') + '</style>' + new XMLSerializer().serializeToString(hh) + '</div></foreignObject></svg>';
-          const im = await load('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg));
+          const im = await App.htmlImage(hh, br.width, br.height);
           if (im) g.drawImage(im, bx, by, br.width, br.height);
         }
       }
-      void hd;
     }
-    try {
-      BI.downloadDataURL((db.name || 'dashboard') + '.png', canvas.toDataURL('image/png'));
-    } catch (e) {
-      BI.toast('이 브라우저에서는 표/KPI가 포함된 대시보드 이미지를 만들 수 없습니다. 인쇄(PDF)를 이용하세요.', 'err');
-    }
+    App.saveCanvas(canvas, db.name || 'dashboard');
   };
 })();

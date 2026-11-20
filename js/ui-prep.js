@@ -60,6 +60,8 @@
       if (work.text) h += '<label>구분자<select data-src="delim">' + D.DELIMS.map(([k, n]) => opt(k, n, (work.delim || 'auto') === k)).join('') + '</select></label>';
       h += '<label title="표 위쪽의 제목·설명 행을 건너뜁니다">건너뛸 행<input type="number" min="0" max="50" data-src="skip" value="' + (work.skip || 0) + '"></label>';
       h += '<label title="머리글로 쓸 행 수. 2 이상이면 여러 줄 머리글을 합칩니다">머리글 행<input type="number" min="0" max="10" data-src="headerRows" value="' + (work.headerRows == null ? 1 : work.headerRows) + '"></label>';
+      if (work.unions.length) h += '<label class="chk" title="각 행이 어느 파일에서 왔는지 열로 추가합니다"><input type="checkbox" data-src="fileCol"' + (work.fileCol ? ' checked' : '') + '> 원본 파일명 열 추가</label>';
+      h += '<label title="표 아래쪽의 주석·출처 행(자료:, 주: 등)을 건너뜁니다">아래쪽 건너뛸 행<input type="number" min="0" max="50" data-src="footer" value="' + (work.footerAuto ? P.detectFooter(work.raw || []) : +work.footer || 0) + '"></label>';
       if (+work.headerRows > 1) h += '<label title="여러 줄 머리글을 합칠 때 사이에 넣는 문자">머리글 연결<input data-src="headerSep" value="' + BI.esc(work.headerSep || ' | ') + '"></label>';
       h += '</div></div>';
       h += '<div class="pf-hd">변환 단계 <span class="muted">' + work.steps.length + '</span></div>';
@@ -81,10 +83,12 @@
 
     function drawBanner() {
       let h = '';
+      if (work.noHeader && +work.headerRows === 0) h += '<div class="pb info">첫 행도 데이터처럼 보여서 머리글 없이 불러왔어요 (열 이름: 열1, 열2 …). 첫 행이 머리글이면 왼쪽 <b>머리글 행</b>을 1로 바꾸세요. 열 이름은 열 메뉴의 <b>이름 바꾸기</b>로 정할 수 있어요.</div>';
       if (view < work.steps.length) h += '<div class="pb info">' + view + '단계까지의 결과를 보고 있어요. 새 단계는 이 위치에 끼워 넣어집니다. <button class="btn sm" data-view-last="1">마지막 단계 보기</button></div>';
-      if (!work.steps.length) {
+      // 피벗 해제 단계를 넣기 전까지는 다른 단계가 있어도 추천을 계속 보여 줌
+      if (!work.steps.some((st) => st.t === 'unpivot' && !st.off)) {
         const sg = P.suggest(work);
-        if (sg) h += '<div class="pb tip"><div><b>분석하기 좋은 형태로 바꿀 수 있어요</b><span>숫자 열 ' + sg.numCols + '개가 가로로 펼쳐진 통계표예요. 숫자 열을 행으로 내리면(피벗 해제) <i>' + BI.esc(sg.textCols.concat(sg.steps[0].names, ['값']).join(' · ')) + '</i> 형태가 되어 필터·차트에 쓰기 쉬워집니다.</span></div><button class="btn primary sm" data-pact="suggest">추천 변환 적용</button></div>';
+        if (sg) h += '<div class="pb tip"><div><b>분석하기 좋은 형태로 바꿀 수 있어요</b><span>시점·항목 열 ' + sg.numCols + '개가 가로로 펼쳐진 통계표예요. 행으로 내리면(피벗 해제) <i>' + BI.esc(sg.textCols.concat(sg.steps[0].names, ['값']).join(' · ')) + '</i> 형태가 되어 필터·차트에 쓰기 쉬워집니다.' + (sg.symbols ? ' 통계 기호(-, x, …)는 Null로 바꾸고' : '') + ' 값은 숫자로 바꿔요.</span></div><button class="btn primary sm" data-pact="suggest">추천 변환 적용</button></div>';
       }
       bannerEl.innerHTML = h;
     }
@@ -129,12 +133,24 @@
         '<div class="pd-row"><b>행으로 내릴 열</b><span><button class="btn sm" data-q="num">숫자 열 모두</button> <button class="btn sm" data-q="all">전체</button> <button class="btn sm" data-q="none">해제</button></span></div>' + colChecks(init) +
         '<label class="chk"><input type="checkbox" id="pdSplit"> 열 이름을 <code>' + BI.esc(sep.trim() || sep) + '</code> 기준으로 나눠 여러 열로 만들기 (여러 줄 머리글)</label>' +
         '<div class="pd-grid"><label>이름 열<input id="pdNames" value="항목"></label><label>값 열<input id="pdValue" value="값"></label></div>' +
-        '<label class="chk"><input type="checkbox" id="pdNull" checked> 값이 비어 있는 행은 만들지 않기</label>';
+        '<label class="chk"><input type="checkbox" id="pdNull" checked> 값이 비어 있는 행은 만들지 않기</label>' +
+        '<div class="pd-row"><b>데이터 교체·행 추가 때</b></div><div class="pd-ops">' +
+        '<label class="chk"><input type="radio" name="pdMode" value="except" checked> 선택하지 않은 열 외 전부 내리기 <span class="muted">(새로 생긴 열도 자동 포함 · 권장)</span></label>' +
+        '<label class="chk"><input type="radio" name="pdMode" value="numeric"> 숫자 열 전부 내리기</label>' +
+        '<label class="chk"><input type="radio" name="pdMode" value="list"> 지금 선택한 열만 (고정 목록)</label></div>';
       const m = dlg('피벗 해제 (열 → 행)', html, (bd) => {
         const cols = checked(bd);
         if (!need(cols)) return false;
         const names = BI.$('#pdNames', bd).value.split(',').map((x) => x.trim()).filter(Boolean);
-        addStep({ t: 'unpivot', cols, names: names.length ? names : ['항목'], sep, value: BI.$('#pdValue', bd).value.trim() || '값', dropNull: BI.$('#pdNull', bd).checked });
+        const mode = BI.$('input[name=pdMode]:checked', bd).value;
+        const keep = T.cols.filter((c) => !cols.includes(c));
+        if (mode === 'numeric') {
+          const nums = T.cols.filter((c, i) => P.isNumericCol(T, i));
+          if (cols.some((c) => !nums.includes(c)) || nums.some((c) => !cols.includes(c))) { BI.toast('"숫자 열 전부"를 고르면 선택과 관계없이 숫자 열이 모두 내려가요. 선택한 열만 내리려면 다른 방식을 고르세요.', 'warn'); return false; }
+        }
+        const st = { t: 'unpivot', mode, cols, names: names.length ? names : ['항목'], sep, value: BI.$('#pdValue', bd).value.trim() || '값', dropNull: BI.$('#pdNull', bd).checked };
+        if (mode !== 'list') st.keep = mode === 'numeric' ? [] : keep;
+        addStep(st);
       }, 520);
       const bd = m.body;
       const sync = () => {
@@ -157,7 +173,10 @@
     }
 
     function dPivot(col) {
-      const num = T.cols.find((c, i) => P.isNumericCol(T, i));
+      // 값 열 기본값: 연도·코드처럼 보이는 숫자 열(이름이 연도/년/코드/번호, 값이 모두 연도)은 피함
+      const yearish = (c, i) => /연도|년|year|코드|code|번호|순서|id$/i.test(c) || T.rows.slice(0, 200).every((r) => r[i] == null || /^(19|20)\d{2}$/.test(String(r[i]).trim()));
+      const nums = T.cols.filter((c, i) => P.isNumericCol(T, i));
+      const num = T.cols.find((c) => c === '값') || nums.find((c) => !yearish(c, T.cols.indexOf(c))) || nums[0];
       dlg('피벗 (행 → 열)', '<p class="muted">이름 열의 각 값이 새 열이 되고, 값 열을 집계해 채웁니다. 나머지 열은 행 기준으로 유지돼요.</p>' +
         '<div class="pd-grid"><label>새 열 이름이 될 열' + colSelect('pdKey', col || T.cols.find((c) => c !== num)) + '</label><label>값 열' + colSelect('pdVal', num) + '</label>' +
         '<label>집계<select id="pdAgg">' + Object.entries(P.AGG_NAMES).map(([k, n]) => opt(k, n, k === 'SUM')).join('') + '</select></label></div>', (bd) => {
@@ -360,10 +379,14 @@
     body.addEventListener('change', (e) => {
       const k = e.target.dataset.src;
       if (!k) return;
-      let v = e.target.value;
-      if (k === 'skip' || k === 'headerRows') v = Math.max(0, +v || 0);
+      let v = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+      if (k === 'skip' || k === 'headerRows' || k === 'footer') v = Math.max(0, +v || 0);
       if (k === 'headerSep' && !v) v = ' | ';
       work[k] = v;
+      if (k === 'footer') work.footerAuto = false;
+      if (k === 'headerRows') work.noHeader = false;
+      // 구분자를 바꾸면 표 모양이 달라지므로 건너뛸 행·머리글 행을 다시 감지
+      if (k === 'delim') { P.redetect(work); BI.toast('구분자에 맞춰 건너뛸 행 ' + work.skip + '줄, 머리글 행 ' + work.headerRows + '줄로 다시 감지했어요.'); }
       view = 0;
       draw();
     });
@@ -376,14 +399,16 @@
         {
           text: '적용', primary: true, onClick: () => {
             const beforeIds = ds.fields.filter((f) => !f.calc).map((f) => f.id);
-            ds.prep = work;
-            let errs;
-            try { errs = P.rebuild(ds); } catch (err) { console.error(err); BI.toast('적용하지 못했어요: ' + err.message, 'err'); return false; }
+            let errs, failed = null;
+            // 실행 취소(Ctrl+Z)로 정리 전 상태로 되돌릴 수 있게 데이터 변경으로 기록
+            App.mutateData(() => {
+              const old = ds.prep;
+              ds.prep = work;
+              try { errs = P.rebuild(ds); } catch (err) { console.error(err); failed = err; ds.prep = old; return false; }
+            });
+            if (failed) { BI.toast('적용하지 못했어요: ' + failed.message, 'err'); return false; }
             const after = new Set(ds.fields.map((f) => f.id));
             const lost = beforeIds.filter((id) => !after.has(id));
-            App.ui.statKey = null;
-            App.refresh();
-            App.autosave();
             // 사라진 필드를 실제로 쓰고 있는 시트가 있는지 (필·필터의 필드 ID로 확인)
             const used = lost.length && App.state.sheets.some((s) => s.dsId === ds.id && lost.some((id) => JSON.stringify([s.shelves, s.filters]).includes('"f":"' + id + '"')));
             BI.toast('데이터 정리를 적용했어요: ' + ds.rows.length.toLocaleString() + '행 · ' + ds.fields.length + '개 필드' + (Object.keys(errs).length ? ' (오류 단계 ' + Object.keys(errs).length + '개 건너뜀)' : '') + (used ? ' · 사라진 필드를 쓰던 시트는 확인이 필요해요' : ''), 'ok');

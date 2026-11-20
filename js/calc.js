@@ -46,7 +46,7 @@
         t.push({ k: 'op', v: two === '&&' ? 'AND' : two === '||' ? 'OR' : two, p: i });
         i += 2; continue;
       }
-      if ('+-*/%^=<>(),&!'.includes(c)) { t.push({ k: 'op', v: c, p: i }); i++; continue; }
+      if ('+-*/%^=<>(),&!{}:'.includes(c)) { t.push({ k: 'op', v: c, p: i }); i++; continue; }
       throw new Error('알 수 없는 문자: "' + c + '"');
     }
     t.push({ k: 'eof', p: n });
@@ -173,8 +173,28 @@
   };
   C.FUNCTIONS = FN;
 
-  function Parser(tokens, ds, selfId) {
+  /* 집계 함수 (계산된 필드 안에서 쓰면 뷰의 차원 수준에서 계산) */
+  const AGG_FN = { SUM: '합계', AVG: '평균', COUNT: '개수', COUNTD: '고유 개수', MIN: '최소', MAX: '최대', MEDIAN: '중앙값', STDEV: '표준편차', VAR: '분산', ATTR: '고유 값' };
+  C.AGG_FN = AGG_FN;
+  /* 도움말용: [최소인자, 최대인자, 반환형, 구현(없음), 설명] */
+  C.AGG_HELP = {
+    SUM: [1, 1, 'number', null, 'SUM(식) 합계 — 뷰의 차원 수준에서 집계. 예) SUM([이익]) / SUM([매출])'],
+    AVG: [1, 1, 'number', null, 'AVG(식) 평균'],
+    COUNT: [1, 1, 'number', null, 'COUNT(식) Null이 아닌 값 개수'],
+    COUNTD: [1, 1, 'number', null, 'COUNTD(식) 고유 개수. 예) SUM([결제금액]) / COUNTD([주문번호])'],
+    MEDIAN: [1, 1, 'number', null, 'MEDIAN(식) 중앙값'],
+    STDEV: [1, 1, 'number', null, 'STDEV(식) 표준편차'],
+    VAR: [1, 1, 'number', null, 'VAR(식) 분산'],
+    ATTR: [1, 1, 'any', null, 'ATTR(식) 값이 하나뿐이면 그 값, 여러 개면 *'],
+    FIXED: [0, 0, 'any', null, '{FIXED [차원] : 집계식} 지정한 차원마다 계산해 행에 붙임. 예) {FIXED [회원ID] : MIN([주문일자])}'],
+  };
+
+  function Parser(tokens, ds, selfId, shared, depth) {
+    shared = shared || { aggs: [] };
+    depth = depth || 0;
+    if (depth > 8) throw new Error('계산된 필드가 서로를 너무 깊게 참조합니다.');
     let i = 0;
+    let inAgg = false, rowRef = false;
     const peek = () => tokens[i];
     const next = () => tokens[i++];
     const isOp = (v) => peek().k === 'op' && peek().v === v;
@@ -327,8 +347,16 @@
         if (f.id === selfId) throw new Error('자기 자신을 참조할 수 없습니다.');
         refs.add(f.id);
         const id = f.id;
+        if (f.aggCalc && f.calc) {
+          // 집계 계산 필드 참조 → 수식을 그대로 펼쳐 같은 집계 목록에 합침
+          if (inAgg) throw new Error('[' + f.name + ']은(는) 집계 계산이라 집계 함수 안에 쓸 수 없습니다.');
+          const sub = Parser(tokenize(String(f.calc)), ds, selfId, shared, depth + 1).run(true);
+          return { t: sub.type, f: sub.fn };
+        }
+        if (!inAgg) rowRef = true;
         return { t: f.type, f: (row) => { const v = row[id]; return v === undefined ? null : v; } };
       }
+      if (t.k === 'op' && t.v === '{') return parseLod();
       if (t.k === 'kw') {
         if (t.v === 'TRUE') { next(); return { t: 'bool', f: () => true }; }
         if (t.v === 'FALSE') { next(); return { t: 'bool', f: () => false }; }
@@ -344,6 +372,7 @@
       }
       if (t.k === 'id') {
         next();
+        if (AGG_FN[t.v] && isOp('(') && !((t.v === 'MIN' || t.v === 'MAX') && argCount() > 1)) return parseAgg(t);
         const def = FN[t.v];
         if (!def) throw new Error('알 수 없는 함수: ' + t.raw);
         expect('op', '(');
@@ -367,6 +396,76 @@
         return { t: rt, f: (row) => impl.apply(null, fs.map((f) => f(row))) };
       }
       throw new Error('예상하지 못한 토큰: ' + (t.v != null ? t.v : t.k) + ' (위치 ' + t.p + ')');
+    }
+    // 현재 위치의 '(' 뒤 최상위 인수 개수
+    function argCount() {
+      let d = 0, n = 1, j = i;
+      if (tokens[j + 1] && tokens[j + 1].k === 'op' && tokens[j + 1].v === ')') return 0;
+      for (; j < tokens.length; j++) {
+        const tk = tokens[j];
+        if (tk.k !== 'op') continue;
+        if (tk.v === '(') d++;
+        else if (tk.v === ')') { d--; if (d === 0) break; }
+        else if (tk.v === ',' && d === 1) n++;
+      }
+      return n;
+    }
+    // SUM([매출]) 같은 집계: 인수는 행 단위로 계산해 누적하고, 결과는 집계 행(__a)에서 읽음
+    function parseAgg(t) {
+      if (inAgg) throw new Error('집계 함수 안에 다른 집계 함수를 쓸 수 없습니다: ' + t.raw);
+      expect('op', '(');
+      inAgg = true;
+      const arg = parseExpr();
+      inAgg = false;
+      if (isOp(',')) throw new Error(t.v + ' 집계 함수는 인수를 하나만 받습니다.');
+      expect('op', ')');
+      const k = shared.aggs.length;
+      shared.aggs.push({ agg: t.v, fn: arg.f });
+      const rt = t.v === 'COUNT' || t.v === 'COUNTD' ? 'number' : t.v === 'MIN' || t.v === 'MAX' || t.v === 'ATTR' ? arg.t : 'number';
+      return { t: rt, agg: true, f: (row) => (row && row.__a ? row.__a[k] : null) };
+    }
+    // {FIXED [차원], ... : 집계식} → 차원 조합마다 전체 행으로 계산한 값을 행 단위로 붙임
+    function parseLod() {
+      expect('op', '{');
+      const kwt = next();
+      const kw = kwt.k === 'id' ? kwt.v : '';
+      if (kw === 'INCLUDE' || kw === 'EXCLUDE') throw new Error(kw + ' 세부 수준 식은 아직 지원하지 않습니다. {FIXED [차원] : 집계} 를 사용하세요.');
+      if (kw !== 'FIXED') throw new Error('{ 뒤에는 FIXED 가 와야 합니다. 예) {FIXED [회원ID] : MIN([주문일자])}');
+      const dims = [];
+      while (peek().k === 'field') {
+        const ft = next();
+        const f = fieldsByName[ft.v.trim().toLowerCase()];
+        if (!f) throw new Error('필드를 찾을 수 없습니다: [' + ft.v + ']');
+        if (f.aggCalc) throw new Error('FIXED 차원에는 집계 계산 필드를 쓸 수 없습니다: [' + f.name + ']');
+        refs.add(f.id);
+        dims.push(f.id);
+        if (isOp(',')) next();
+      }
+      expect('op', ':');
+      const saveShared = shared, saveRow = rowRef, saveIn = inAgg;
+      shared = { aggs: [] }; rowRef = false; inAgg = false;
+      const e = parseExpr();
+      const inner = shared, innerRow = rowRef;
+      shared = saveShared; rowRef = saveRow; inAgg = saveIn;
+      expect('op', '}');
+      if (!inner.aggs.length) throw new Error('FIXED 식의 : 뒤에는 SUM, MIN 같은 집계 함수가 필요합니다.');
+      if (innerRow) throw new Error('FIXED 식 안에서 집계하지 않은 필드를 집계 함수 밖에 쓸 수 없습니다.');
+      if (!inAgg) rowRef = true;
+      let cache = null;
+      const keyOf = (row) => dims.map((id) => { const v = row[id]; return typeof v + ':' + v; }).join('\u0001');
+      const build = () => {
+        const Q = BI.Query;
+        const groups = new Map();
+        for (const r of ds.rows || []) {
+          const k = keyOf(r);
+          let g = groups.get(k);
+          if (!g) groups.set(k, (g = inner.aggs.map((a) => Q.makeAcc(a.agg))));
+          inner.aggs.forEach((a, j) => { let v; try { v = a.fn(r); } catch (x) { v = null; } Q.addAcc(g[j], a.agg, v); });
+        }
+        cache = new Map();
+        groups.forEach((g, k) => { let v; try { v = e.f({ __a: g.map((acc, j) => Q.finAcc(acc, inner.aggs[j].agg)) }); } catch (x) { v = null; } cache.set(k, v === undefined ? null : v); });
+      };
+      return { t: e.t, f: (row) => { if (!cache) build(); const v = cache.get(keyOf(row)); return v === undefined ? null : v; } };
     }
     function parseIf() {
       expect('kw', 'IF');
@@ -417,10 +516,11 @@
     }
 
     return {
-      run() {
+      run(nested) {
         const e = parseExpr();
         if (peek().k !== 'eof') throw new Error('수식 끝에 불필요한 내용이 있습니다 (위치 ' + peek().p + ')');
-        return { fn: e.f, type: e.t, refs: Array.from(refs) };
+        if (!nested && shared.aggs.length && rowRef) throw new Error('집계 함수(SUM 등)와 집계하지 않은 필드를 함께 쓸 수 없습니다. 필드를 SUM([필드])처럼 집계로 감싸세요.');
+        return { fn: e.f, type: e.t, refs: Array.from(refs), aggs: shared.aggs, isAgg: shared.aggs.length > 0 };
       },
     };
   }
@@ -428,6 +528,7 @@
   C.compile = function (src, ds, selfId) {
     if (!src || !String(src).trim()) throw new Error('수식이 비어 있습니다.');
     const res = Parser(tokenize(String(src)), ds, selfId).run();
+    if (res.isAgg) { if (res.type === 'any') res.type = 'number'; return res; }
     if (res.type === 'any') {
       // 샘플 행으로 타입 추정
       for (let i = 0; i < Math.min(ds.rows.length, 200); i++) {
