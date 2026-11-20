@@ -99,6 +99,7 @@
       const title = BI.$('.di-title', el), btns = BI.$('.di-btns', el);
       if (it.type === 'sheet') {
         title.textContent = sheet ? sheet.title || sheet.name : '(삭제된 시트)';
+        title.style.textAlign = (sheet && sheet.options.titleAlign) || 'left';
         btns.innerHTML = '<button data-iact="filter" class="' + (it.filter ? 'on' : '') + '" title="필터로 사용 (클릭한 값으로 다른 시트 필터링)">' + BI.ICON.filter + '</button><button data-iact="menu" title="메뉴">' + BI.ICON.more + '</button><button data-iact="remove" title="제거">' + BI.ICON.x + '</button>';
         const bd = BI.$('.di-bd', el);
         if (sheet) {

@@ -33,9 +33,11 @@
     const name = file.name;
     const ext = (name.split('.').pop() || '').toLowerCase();
     const buf = await D.readFile(file);
-    if (ext === 'csv' || ext === 'tsv' || ext === 'txt') {
+    if (ext === 'csv' || ext === 'tsv' || ext === 'txt' || ext === 'dat' || ext === 'prn') {
       const text = D.decodeText(buf);
-      return [{ name: name.replace(/\.[^.]+$/, ''), aoa: D.parseCSV(text, ext === 'tsv' ? '\t' : null) }];
+      const delim = ext === 'tsv' ? '\t' : D.detectDelimiter(text);
+      // 원본 텍스트는 구분자를 바꿔 다시 읽을 수 있도록 보관 (너무 크면 생략)
+      return [{ name: name.replace(/\.[^.]+$/, ''), aoa: D.parseCSV(text, delim), text: text.length < 20e6 ? text : null, delim }];
     }
     if (ext === 'json') {
       const text = D.decodeText(buf);
@@ -108,11 +110,17 @@
       }
       if (n > bestN) { best = d; bestN = n; }
     });
+    if (bestN === 0 && /\S {2,}\S/.test(line)) return 'ws';
     return best;
   };
 
+  D.DELIMS = [['auto', '자동 감지'], [',', '쉼표 (,)'], ['\t', '탭'], [';', '세미콜론 (;)'], ['|', '세로선 (|)'], ['ws', '공백 정렬 (2칸 이상)'], [' ', '공백 1칸']];
   D.parseCSV = function (text, delim) {
-    delim = delim || D.detectDelimiter(text);
+    if (!delim || delim === 'auto') delim = D.detectDelimiter(text);
+    if (delim === 'ws') {
+      // 공백으로 열을 맞춘 텍스트(고정폭): 탭 또는 2칸 이상 공백을 구분자로
+      return text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim()).map((l) => l.trim().split(/\t|\s{2,}/).map((v) => v.replace(/^"(.*)"$/, '$1')));
+    }
     const rows = [];
     let row = [], f = '', i = 0, q = false;
     const n = text.length;
@@ -260,7 +268,7 @@
       while (used[nm]) nm = base + ' (' + i++ + ')';
       used[nm] = 1;
       const col = body.map((r) => (r ? r[c] : null));
-      const type = D.inferType(col, nm);
+      const type = (opts.types && opts.types[nm]) || D.inferType(col, nm);
       fields.push({ id: 'f' + c + '_' + Math.random().toString(36).slice(2, 6), name: nm, type, role: D.defaultRole(type, nm), _c: c });
     }
     // 비어 있는 열 제거

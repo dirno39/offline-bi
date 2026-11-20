@@ -73,7 +73,7 @@
     const s = stats(ds);
     const typeSel = (f) => f.calc ? '<span class="muted">계산</span>' : '<select data-ftype="' + f.id + '">' + [['string', '문자열'], ['number', '숫자'], ['date', '날짜'], ['bool', '부울']].map(([k, n]) => '<option value="' + k + '"' + (f.type === k ? ' selected' : '') + '>' + n + '</option>').join('') + '</select>';
     let h = '<div class="ds-head"><div><h2 class="ds-name" title="클릭하여 이름 변경">' + BI.esc(ds.name) + '</h2><div class="muted">' + (ds.source ? '원본 파일: ' + BI.esc(ds.source) + ' · ' : '') + ds.rows.length.toLocaleString() + '행 · ' + ds.fields.length + '개 필드</div></div>' +
-      '<div class="ds-acts"><button class="btn primary" data-dsact="analyze">새 시트에서 분석 →</button><button class="btn" data-dsact="calc">계산된 필드</button><button class="btn" data-dsact="replace" title="같은 구조의 새 파일로 데이터를 교체합니다 (시트 유지)">데이터 교체…</button><button class="btn" data-dsact="union" title="같은 열 구조의 파일을 아래에 추가합니다">행 추가(유니온)…</button><button class="btn" data-dsact="export">CSV 내보내기</button><button class="btn danger" data-dsact="delete">삭제</button></div></div>';
+      '<div class="ds-acts"><button class="btn primary" data-dsact="analyze">새 시트에서 분석 →</button><button class="btn" data-dsact="prep" title="피벗 해제·열 분할·값 정리 등으로 표 구조를 바꿉니다">데이터 정리' + (ds.prep && ds.prep.steps.length ? ' <span class="badge">' + ds.prep.steps.length + '단계</span>' : '') + '…</button><button class="btn" data-dsact="calc">계산된 필드</button><button class="btn" data-dsact="replace" title="같은 구조의 새 파일로 데이터를 교체합니다 (시트 유지)">데이터 교체…</button><button class="btn" data-dsact="union" title="같은 열 구조의 파일을 아래에 추가합니다">행 추가(유니온)…</button><button class="btn" data-dsact="export">CSV 내보내기</button><button class="btn danger" data-dsact="delete">삭제</button></div></div>';
     h += '<div class="ds-body"><div class="ds-fields"><table class="grid"><thead><tr><th>유형</th><th>필드명</th><th>역할</th><th>고유값</th><th>Null</th><th>범위 / 예시</th></tr></thead><tbody>';
     ds.fields.forEach((f) => {
       const st = s[f.id] || {};
@@ -94,7 +94,7 @@
     return new Promise((res) => {
       const inp = document.createElement('input');
       inp.type = 'file';
-      inp.accept = accept || '.csv,.tsv,.txt,.xlsx,.xls,.xlsm,.xlsb,.ods,.json';
+      inp.accept = accept || '.csv,.tsv,.txt,.dat,.prn,.xlsx,.xls,.xlsm,.xlsb,.ods,.json';
       inp.onchange = () => res(inp.files[0] || null);
       inp.click();
     });
@@ -103,8 +103,7 @@
     const tables = await D.parseFile(file);
     if (!tables.length) throw new Error('데이터가 없습니다.');
     const t = tables.length > 1 ? (await App.pickTables(file.name, tables))[0] : tables[0];
-    if (!t) return null;
-    return D.buildDataSource(t.name, t.aoa);
+    return t || null;
   }
 
   function afterDataChange(ds) {
@@ -129,22 +128,33 @@
         if (act === 'analyze' && ds) {
           App.mutate(() => { const s = App.newSheet(ds.id); App.state.sheets.push(s); App.state.tabs.push({ type: 'sheet', id: s.id }); App.state.active = { type: 'sheet', id: s.id }; });
         } else if (act === 'calc' && ds) App.editCalc(ds);
+        else if (act === 'prep' && ds) App.openPrep(ds);
         else if (act === 'replace' && ds) {
           const f = await pickFile();
           if (!f) return;
-          const nd = await loadOne(f);
-          if (!nd) return;
-          const missing = D.replaceRows(ds, nd);
+          const t = await loadOne(f);
+          if (!t) return;
+          // 원본만 바꾸고 기존 정리 단계는 그대로 다시 적용
+          const src = BI.Prep.ensure(ds);
+          const before = ds.fields.filter((x) => !x.calc).map((x) => x.name);
+          const ns = BI.Prep.newSource(t);
+          Object.assign(src, { raw: ns.raw, text: ns.text, delim: ns.delim, _parsedDelim: ns._parsedDelim, unions: [] });
+          if (!src.steps.length) { src.skip = ns.skip; src.headerRows = ns.headerRows; delete src.baseTypes; }
+          const errs = BI.Prep.rebuild(ds);
           ds.source = f.name;
           afterDataChange(ds);
-          BI.toast('데이터를 교체했습니다 (' + ds.rows.length.toLocaleString() + '행)' + (missing.length ? ' · 새 파일에 없는 필드: ' + missing.join(', ') : ''), missing.length ? 'err' : 'ok');
+          const missing = before.filter((n) => !ds.fields.some((x) => x.name === n));
+          const ne = Object.keys(errs).length;
+          BI.toast('데이터를 교체했습니다 (' + ds.rows.length.toLocaleString() + '행)' + (src.steps.length ? ' · 정리 단계 ' + src.steps.length + '개 다시 적용' : '') + (ne ? ' · 실패한 단계 ' + ne + '개' : '') + (missing.length ? ' · 새 파일에 없는 필드: ' + missing.join(', ') : ''), missing.length || ne ? 'err' : 'ok');
         } else if (act === 'union' && ds) {
           const f = await pickFile();
           if (!f) return;
-          const nd = await loadOne(f);
-          if (!nd) return;
+          const t = await loadOne(f);
+          if (!t) return;
           const before = ds.rows.length;
-          D.unionRows(ds, nd);
+          const src = BI.Prep.ensure(ds);
+          src.unions.push(BI.Prep.normalize(t.aoa));
+          BI.Prep.rebuild(ds);
           afterDataChange(ds);
           BI.toast((ds.rows.length - before).toLocaleString() + '행을 추가했습니다.', 'ok');
         } else if (act === 'export' && ds) {
@@ -172,7 +182,7 @@
       const t = e.target;
       if (t.dataset.ftype) {
         const f = D.fieldById(ds, t.dataset.ftype);
-        D.changeType(ds, f, t.value);
+        App.setFieldType(ds, f, t.value);
         afterDataChange(ds);
       } else if (t.dataset.frole) {
         D.fieldById(ds, t.dataset.frole).role = t.value;
@@ -182,6 +192,7 @@
         const v = t.value.trim();
         if (!v || ds.fields.some((x) => x !== f && x.name.toLowerCase() === v.toLowerCase())) { BI.toast('이름이 비었거나 중복됩니다.', 'err'); t.value = f.name; return; }
         ds.fields.forEach((x) => { if (x.calc) x.calc = BI.Calc.renameRef(x.calc, f.name, v); });
+        if (!f.calc) BI.Prep.record(ds, { t: 'rename', col: f.name, to: v });
         f.name = v;
         App.refresh();
         App.autosave();

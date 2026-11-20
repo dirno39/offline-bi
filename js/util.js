@@ -235,6 +235,9 @@
       opts.onClose && opts.onClose();
     };
     const onKey = (e) => {
+      // 모달이 겹쳐 있으면 맨 위 모달만 키 입력 처리
+      const ovs = document.querySelectorAll('.modal-ov');
+      if (ovs[ovs.length - 1] !== ov) return;
       if (e.key === 'Escape') close();
       if (e.key === 'Enter' && opts.enterSubmits !== false && e.target.tagName !== 'TEXTAREA') {
         const p = (opts.buttons || []).find((b) => b.primary);

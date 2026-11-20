@@ -187,6 +187,21 @@
     const fs = String(o.fontScale || 1);
     h += '<div class="opt-row"><span>글자 크기</span><div class="seg xs" role="group" aria-label="글자 크기">' + [['0.85', '작게', 11], ['1', '보통', 12.5], ['1.2', '크게', 14], ['1.45', '아주 크게', 16]].map(([v, n, px]) => '<button type="button" data-optset="fontScale" data-v="' + v + '" class="' + (fs === v ? 'on' : '') + '" title="' + n + '" style="font-size:' + px + 'px">가</button>').join('') + '</div></div>';
     if (o.legend !== false) h += '<div class="opt-row"><span>범례 위치</span><div class="seg xs" role="group" aria-label="범례 위치">' + [['top', '위'], ['right', '오른쪽'], ['bottom', '아래']].map(([v, n]) => '<button type="button" data-optset="legendPos" data-v="' + v + '" class="' + ((o.legendPos || 'top') === v ? 'on' : '') + '">' + n + '</button>').join('') + '</div></div>';
+    // 텍스트 위치
+    const segOpt = (key, cur, items) => '<div class="seg xs" role="group">' + items.map(([v, n]) => '<button type="button" data-optset="' + key + '" data-v="' + v + '" class="' + (cur === v ? 'on' : '') + '">' + n + '</button>').join('') + '</div>';
+    const num = (key, title) => '<input type="number" class="nudge" data-opt="' + key + '" value="' + (+o[key] || 0) + '" step="2" min="-200" max="200" title="' + title + '">';
+    h += '<div class="opt-sub">텍스트 위치</div>';
+    if (o.showTitle !== false) h += '<div class="opt-row"><span>제목 정렬</span>' + segOpt('titleAlign', o.titleAlign || 'left', [['left', '왼쪽'], ['center', '가운데'], ['right', '오른쪽']]) + '</div>';
+    if (!['table', 'hltable', 'kpi', 'gauge', 'heatmap', 'calendar', 'sankey', 'boxplot', 'histogram', 'radar', 'treemap', 'sunburst'].includes(type)) {
+      h += '<div class="opt-row"><span>레이블 위치</span>' + segOpt('labelPos', o.labelPos || 'auto', [['auto', '자동'], ['inside', '안쪽'], ['outside', '바깥쪽']]) + '</div>';
+      h += '<div class="opt-row nr"><span>레이블 이동 (px)</span><span class="nudges">좌우' + num('labelDx', '가로 이동(px): + 오른쪽') + '상하' + num('labelDy', '세로 이동(px): + 아래') + '</span></div>';
+    }
+    if (type === 'donut') {
+      h += '<label class="chk"><input type="checkbox" data-opt="donutCenter"' + (o.donutCenter !== false ? ' checked' : '') + '> 도넛 가운데 합계 표시</label>';
+      if (o.donutCenter !== false) h += '<div class="opt-row nr"><span>가운데 글자 이동 (px)</span><span class="nudges">좌우' + num('centerDx', '가로 이동(px)') + '상하' + num('centerDy', '세로 이동(px): + 아래') + '</span></div>';
+    }
+    if (!['table', 'hltable', 'kpi'].includes(type)) h += '<div class="opt-hint">차트의 레이블은 마우스로 끌어 옮길 수도 있어요 (화면을 다시 그리면 원래 자리로).</div>';
+    h += '<div class="opt-sub">값 · 색상</div>';
     h += '<div class="opt-row"><span>숫자 형식</span><select data-opt="numFmt">' + BI.NUM_FORMATS.map(([k, n]) => '<option value="' + k + '"' + (o.numFmt === k ? ' selected' : '') + '>' + n + '</option>').join('') + '</select></div>';
     h += '<div class="opt-row"><span>색상 팔레트</span><select data-opt="palette">' + Object.keys(BI.PALETTES).map((k) => '<option value="' + k + '"' + (o.palette === k ? ' selected' : '') + '>' + BI.PALETTE_NAMES[k] + '</option>').join('') + '</select></div>';
     h += '<div class="opt-row"><span>연속 색상</span><select data-opt="seq">' + Object.keys(BI.SEQ).map((k) => '<option value="' + k + '"' + (o.seq === k ? ' selected' : '') + '>' + BI.SEQ_NAMES[k] + '</option>').join('') + '</select></div>';
@@ -213,6 +228,7 @@
     const t = BI.$('#viewTitle');
     t.style.display = sh.options.showTitle === false ? 'none' : '';
     t.style.setProperty('--fs', +sh.options.fontScale || 1);
+    t.style.textAlign = sh.options.titleAlign || 'left';
     t.innerHTML = '<span class="vt-text" title="더블클릭하여 제목 편집">' + BI.esc(sh.title || sh.name) + '</span>';
     const out = App.renderChartInto(view, sh, {
       onSelect: (sel, ev) => sheetSelectMenu(sh, sel, ev),
@@ -666,7 +682,7 @@
       if (f.calc) {
         items.push({ text: '계산 편집…', onClick: () => App.editCalc(ds, f) });
       } else {
-        items.push({ text: '데이터 유형 변경', sub: [['string', '문자열'], ['number', '숫자'], ['date', '날짜'], ['bool', '부울']].map(([k, n]) => ({ text: n, checked: f.type === k, onClick: () => { D.changeType(ds, f, k); D.applyCalcs(ds); after(); } })) });
+        items.push({ text: '데이터 유형 변경', sub: [['string', '문자열'], ['number', '숫자'], ['date', '날짜'], ['bool', '부울']].map(([k, n]) => ({ text: n, checked: f.type === k, onClick: () => { App.setFieldType(ds, f, k); after(); } })) });
       }
       items.push(f.role === 'measure' ? { text: '차원으로 변환', onClick: () => { f.role = 'dimension'; after(); } } : { text: '측정값으로 변환', onClick: () => { f.role = 'measure'; after(); } });
       if (f.role === 'measure' && f.type === 'number') items.push({ text: '기본 집계', sub: Q.AGGS.map(([k, n]) => ({ text: n, checked: (f.defAgg || 'SUM') === k, onClick: () => { f.defAgg = k; after(); } })) });
@@ -693,12 +709,19 @@
       if (v !== f.name && ds.fields.some((x) => x !== f && x.name.toLowerCase() === v.toLowerCase())) return BI.toast('같은 이름의 필드가 이미 있습니다.', 'err');
       const old = f.name;
       ds.fields.forEach((x) => { if (x.calc) x.calc = BI.Calc.renameRef(x.calc, old, v); });
+      if (!f.calc) BI.Prep.record(ds, { t: 'rename', col: old, to: v });
       f.name = v;
       App.refresh();
       App.autosave();
     });
   };
+  /* 유형 변경: 정리 흐름이 있으면 단계로 기록 후 다시 실행 (부울은 흐름에서 지원하지 않아 직접 변환) */
+  App.setFieldType = function (ds, f, k) {
+    if (ds.prep && !f.calc && k !== 'bool') { BI.Prep.record(ds, { t: 'type', col: f.name, to: k }); BI.Prep.rebuild(ds); }
+    else { D.changeType(ds, f, k); D.applyCalcs(ds); }
+  };
   App.deleteField = function (ds, f) {
+    if (!f.calc) BI.Prep.record(ds, { t: 'remove', cols: [f.name] });
     ds.fields = ds.fields.filter((x) => x !== f);
     ds.rows.forEach((r) => delete r[f.id]);
     const keep = (p) => p && p.f !== f.id;

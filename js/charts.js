@@ -467,9 +467,19 @@
       label: { show: lblShow, formatter: (p) => p.name + '\n' + (ctx.o.labels ? ctx.fv(mi, p.value) + ' ' : '') + '(' + BI.formatNumber(p.percent / 100, 'pct') + ')', fontSize: 11 },
       emphasis: { scale: true, scaleSize: 6 },
     }];
-    if (type === 'donut') {
-      opt.title = { text: ctx.fv(mi, tot), subtext: ctx.ml(mi), left: opt.legend.show === false ? 'center' : '42%', top: '45%', textAlign: 'center', textStyle: { fontSize: 20, fontWeight: 800, color: '#191f28' }, subtextStyle: { fontSize: 11 } };
-      if (opt.legend.show === false) opt.title.left = 'center';
+    if (type === 'donut' && ctx.o.donutCenter !== false) {
+      // 도넛과 같은 중심을 쓰는 투명 시리즈의 'center' 레이블 → 범례 위치·창 크기와 관계없이 정확히 가운데
+      opt.series.push({
+        type: 'pie', name: '__center', radius: [0, '40%'], center: opt.series[0].center, silent: true, tooltip: { show: false },
+        itemStyle: { color: 'rgba(0,0,0,0)' }, emphasis: { disabled: true }, labelLine: { show: false },
+        data: [{ value: 1, name: '' }],
+        label: {
+          show: true, position: 'center', offset: [+ctx.o.centerDx || 0, +ctx.o.centerDy || 0],
+          formatter: () => '{v|' + ctx.fv(mi, tot) + '}\n{s|' + ctx.ml(mi) + '}',
+          rich: { v: { fontSize: 20, fontWeight: 800, color: '#191f28', lineHeight: 28 }, s: { fontSize: 11, color: '#6b7684', lineHeight: 16 } },
+        },
+      });
+      if (opt.legend.show !== false) opt.legend.data = data.map((d) => d.name);
     }
     return { option: opt };
   }
@@ -1053,8 +1063,28 @@
     return out;
   };
 
+  /* 레이블 위치(자동/안쪽/바깥쪽)와 X·Y 미세 조정 */
+  function labelTweak(opt, ctx) {
+    const pos = ctx.o.labelPos || 'auto';
+    const dx = +ctx.o.labelDx || 0, dy = +ctx.o.labelDy || 0;
+    const horizontal = opt.yAxis && !Array.isArray(opt.yAxis) && opt.yAxis.type === 'category';
+    [].concat(opt.series || []).forEach((s) => {
+      if (!s || s.name === '__center' || !s.label || s.label.show === false) return;
+      if (pos !== 'auto') {
+        if (s.type === 'bar') s.label.position = pos === 'inside' ? 'inside' : horizontal ? 'right' : 'top';
+        else if (s.type === 'pie') { s.label.position = pos === 'inside' ? 'inside' : 'outside'; if (pos === 'inside') s.label.color = '#fff'; }
+        else if (s.type === 'line' || s.type === 'scatter') s.label.position = pos === 'inside' ? 'inside' : 'top';
+        else if (s.type === 'funnel') s.label.position = pos === 'inside' ? 'inside' : 'right';
+      }
+      if (dx || dy) s.label.offset = [dx, dy];
+      // 개별 레이블을 마우스로 끌어 옮길 수 있게 (내보내기 전 미세 조정용)
+      if (['bar', 'pie', 'scatter', 'line', 'funnel'].includes(s.type)) s.labelLayout = Object.assign({}, s.labelLayout, { draggable: true });
+    });
+  }
+
   /* 서식 후처리: 글자 크기 배율, 범례 위치 */
   function postStyle(opt, ctx) {
+    labelTweak(opt, ctx);
     const k = +ctx.o.fontScale || 1;
     if (k !== 1) {
       const seen = new Set();

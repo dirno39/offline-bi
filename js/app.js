@@ -169,7 +169,7 @@
         if (tables.length > 1) chosen = await App.pickTables(file.name, tables);
         chosen.forEach((t) => {
           const nm = tables.length > 1 ? file.name.replace(/\.[^.]+$/, '') + ' - ' + t.name : t.name;
-          const ds = D.buildDataSource(nm, t.aoa);
+          const ds = BI.Prep.createDataSource(nm, t);
           ds.source = file.name;
           if (!ds.fields.length) { BI.toast(nm + ': 열을 찾을 수 없습니다.', 'err'); return; }
           added.push(ds);
@@ -181,6 +181,12 @@
     }
     if (!added.length) return;
     App.addDataSources(added);
+    // 여러 줄 머리글이거나 가로로 펼쳐진 통계표면 데이터 정리 화면을 바로 열어 줌
+    const odd = added.find((d) => d.prep && (+d.prep.headerRows > 1 || +d.prep.skip > 0 || BI.Prep.suggest(d.prep)));
+    if (odd) {
+      const why = +odd.prep.headerRows > 1 ? '머리글이 ' + odd.prep.headerRows + '줄인 표라 하나로 합쳤어요.' : +odd.prep.skip > 0 ? '표 위쪽 제목 행 ' + odd.prep.skip + '줄을 건너뛰었어요.' : '숫자 열이 가로로 펼쳐진 표예요.';
+      setTimeout(() => App.openPrep(odd, { message: why + ' 필요하면 여기서 분석하기 좋은 형태로 바꿔 보세요.' }), 300);
+    }
   };
   App.addDataSources = function (added) {
     added.forEach((ds) => App.state.datasources.push(ds));
