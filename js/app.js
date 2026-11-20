@@ -332,7 +332,8 @@
         });
       } catch (e) {
         console.error(e);
-        BI.toast(file.name + ' 읽기 실패: ' + e.message, 'err');
+        // 원인과 해결 방법이 담긴 긴 안내는 사라지지 않는 대화상자로
+        BI.modal({ title: '파일을 불러오지 못했어요', width: 460, body: '<p><b>' + BI.esc(file.name) + '</b></p><p>' + BI.esc(e.message) + '</p>' });
       }
     }
     if (!added.length) return;

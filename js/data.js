@@ -16,7 +16,36 @@
     });
   };
 
-  D.decodeText = function (buf) {
+  /* 파일 내용(바이트)으로 실제 형식 판별 — 확장자와 다를 수 있음 */
+  D.sniff = function (buf) {
+    const b = new Uint8Array(buf, 0, Math.min(buf.byteLength, 65536));
+    const n = b.length;
+    if (n >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04) return 'zip';
+    if (n >= 8 && b[0] === 0xd0 && b[1] === 0xcf && b[2] === 0x11 && b[3] === 0xe0 && b[4] === 0xa1 && b[5] === 0xb1 && b[6] === 0x1a && b[7] === 0xe1) return 'cfb';
+    if (n >= 2 && b[0] === 0xff && b[1] === 0xfe) return 'utf16le';
+    if (n >= 2 && b[0] === 0xfe && b[1] === 0xff) return 'utf16be';
+    // BOM 없는 UTF-16: 짝수/홀수 위치에 0 바이트가 많음
+    let z0 = 0, z1 = 0;
+    const m = Math.min(n, 4096) & ~1;
+    for (let i = 0; i < m; i += 2) { if (b[i] === 0) z0++; if (b[i + 1] === 0) z1++; }
+    if (m >= 8 && z1 > m * 0.2 && z0 < m * 0.02) return 'utf16le';
+    if (m >= 8 && z0 > m * 0.2 && z1 < m * 0.02) return 'utf16be';
+    // HTML/XML 표 (웹 시스템에서 받은 "xls"가 실제로는 HTML인 경우가 많음)
+    let head = '';
+    for (let i = 0; i < Math.min(n, 1024); i++) head += String.fromCharCode(b[i]);
+    head = head.replace(/^\xef\xbb\xbf/, '').trim().slice(0, 300).toLowerCase();
+    if (/^<(\?xml|!doctype html|html|table|meta|head|body)/.test(head) || /<table[\s>]/.test(head)) return 'html';
+    // 제어 문자(탭·줄바꿈 제외) 비율이 높으면 텍스트가 아님 → 암호화(DRM)·압축·기타 바이너리
+    let ctrl = 0;
+    for (let i = 0; i < n; i++) { const c = b[i]; if (c === 0 || (c < 0x09) || (c > 0x0d && c < 0x20 && c !== 0x1b)) ctrl++; }
+    if (n > 64 && ctrl / n > 0.01) return 'binary';
+    return 'text';
+  };
+  D.BINARY_MSG = '파일 내용을 읽을 수 없어요. 문서 보안(DRM)으로 암호화되었거나 텍스트·엑셀 형식이 아닌 파일 같아요. 문서 보안 프로그램에서 "복호화" 또는 "일반 문서로 저장"한 뒤 다시 불러오거나, 엑셀에서 CSV(쉼표로 분리) 또는 XLSX로 다시 저장해 주세요.';
+
+  D.decodeText = function (buf, kind) {
+    kind = kind || D.sniff(buf);
+    if (kind === 'utf16le' || kind === 'utf16be') return new TextDecoder(kind === 'utf16le' ? 'utf-16le' : 'utf-16be').decode(buf).replace(/^\uFEFF/, '');
     try {
       return new TextDecoder('utf-8', { fatal: true }).decode(buf).replace(/^﻿/, '');
     } catch (e) {
@@ -33,8 +62,14 @@
     const name = file.name;
     const ext = (name.split('.').pop() || '').toLowerCase();
     const buf = await D.readFile(file);
-    if (ext === 'csv' || ext === 'tsv' || ext === 'txt' || ext === 'dat' || ext === 'prn') {
-      const text = D.decodeText(buf);
+    const kind = D.sniff(buf);
+    const isTextExt = ext === 'csv' || ext === 'tsv' || ext === 'txt' || ext === 'dat' || ext === 'prn';
+    // 확장자와 실제 내용이 다른 경우: 엑셀/HTML 표는 엑셀 경로로, 암호화·바이너리는 안내
+    if (kind === 'binary') throw new Error(D.BINARY_MSG);
+    if (isTextExt && (kind === 'zip' || kind === 'cfb' || kind === 'html')) return D.parseWorkbook(buf, kind);
+    if (isTextExt) {
+      const text = D.decodeText(buf, kind);
+      if (D.looksGarbled(text)) throw new Error(D.BINARY_MSG);
       const delim = ext === 'tsv' ? '\t' : D.detectDelimiter(text);
       // 원본 텍스트는 구분자를 바꿔 다시 읽을 수 있도록 보관 (너무 크면 생략)
       return [{ name: name.replace(/\.[^.]+$/, ''), aoa: D.parseCSV(text, delim), text: text.length < 20e6 ? text : null, delim }];
@@ -51,9 +86,46 @@
       j.forEach((o) => Object.keys(o || {}).forEach((k) => { if (!cols.includes(k)) cols.push(k); }));
       return [{ name: name.replace(/\.[^.]+$/, ''), aoa: [cols].concat(j.map((o) => cols.map((c) => (o || {})[c]))) }];
     }
+    if (kind === 'text' || kind === 'utf16le' || kind === 'utf16be') {
+      // 엑셀 확장자인데 실제로는 텍스트(CSV/탭) — 웹 시스템 내보내기에서 흔함
+      const text = D.decodeText(buf, kind);
+      if (!D.looksGarbled(text)) {
+        const delim = D.detectDelimiter(text);
+        return [{ name: name.replace(/\.[^.]+$/, ''), aoa: D.parseCSV(text, delim), text: text.length < 20e6 ? text : null, delim }];
+      }
+      throw new Error(D.BINARY_MSG);
+    }
+    return D.parseWorkbook(buf, kind);
+  };
+
+  /* 텍스트로 디코딩한 결과가 깨진 글자투성이인지 */
+  D.looksGarbled = function (text) {
+    const s = text.slice(0, 50000);
+    if (s.length < 50) return false;
+    let bad = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c === 0xfffd || c < 0x09 || (c > 0x0d && c < 0x20) || (c >= 0x7f && c <= 0x9f) || (c >= 0xe000 && c <= 0xf8ff)) bad++;
+    }
+    return bad / s.length > 0.02;
+  };
+
+  D.parseWorkbook = function (buf, kind) {
     if (typeof XLSX === 'undefined') throw new Error('엑셀 라이브러리를 불러오지 못했습니다.');
-    const wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: false, cellNF: true, cellText: false });
-    return wb.SheetNames.map((sn) => ({ name: sn, aoa: D.sheetToAoa(wb.Sheets[sn]) })).filter((t) => t.aoa.length > 0);
+    let wb;
+    try {
+      wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: false, cellNF: true, cellText: false });
+    } catch (e) {
+      const msg = String(e && e.message || e);
+      if (/password|encrypt|protect/i.test(msg)) throw new Error('암호가 걸린 엑셀 파일이에요. 엑셀에서 암호를 해제하고 다시 저장한 뒤 불러와 주세요.');
+      if (kind === 'cfb') throw new Error('엑셀 파일을 열 수 없어요. 암호가 걸려 있거나 문서 보안(DRM)으로 암호화된 파일일 수 있어요. 암호/보안을 해제해 XLSX 또는 CSV로 다시 저장해 주세요.');
+      throw new Error(D.BINARY_MSG);
+    }
+    const out = wb.SheetNames.map((sn) => ({ name: sn, aoa: D.sheetToAoa(wb.Sheets[sn]) })).filter((t) => t.aoa.length > 0);
+    // 읽기는 됐는데 내용이 깨진 경우(알 수 없는 형식을 텍스트로 해석) 안내
+    const sample = out.slice(0, 3).map((t) => t.aoa.slice(0, 200).map((r) => r.join('\t')).join('\n')).join('\n');
+    if (out.length && D.looksGarbled(sample)) throw new Error(D.BINARY_MSG);
+    return out;
   };
 
   D.sheetToAoa = function (ws) {
